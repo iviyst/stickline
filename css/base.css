@@ -1,0 +1,17 @@
+[hidden] { display: none !important; }
+/* Layout concept: the canvas is the whole screen, edge to edge (the app layer is fixed, so the page wrapper's safe-area padding can't letterbox it).
+   Menus are compact slabs floating over a live level backdrop; touch play uses two floating joysticks, one per half of the screen. */
+:root {
+  --ink: #0c0f1f; --ink2: #171b36; --panel: rgba(12,15,31,.86); --line: rgba(255,255,255,.15);
+  --sand: #f5ede1; --mute: #aab1c8; --coral: #ff5a3c; --coral-d: #c93a20; --gold: #ffc94a;
+  --f-d: 'Bungee', 'Impact', 'Arial Black', sans-serif;
+  --f-b: 'Barlow Semi Condensed', 'Arial Narrow', 'Helvetica Neue', Arial, sans-serif;
+  color-scheme: dark;
+  padding: 0;
+}
+html, body { height: 100%; overflow: hidden; overscroll-behavior: none; }
+body { margin: 0; background: var(--ink); color: var(--sand); font: 600 16px/1.35 var(--f-b); overflow: hidden; overscroll-behavior: none; -webkit-tap-highlight-color: transparent; }
+#app { position: fixed; inset: 0; overflow: hidden; background: var(--ink); }
+#cv { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+button { font: inherit; color: inherit; }
+

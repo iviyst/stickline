@@ -1,0 +1,58 @@
+/* player accounts: log in, new player, forgot name or PIN */
+#pAuth .card { width: min(460px, 100%); }
+.logo.sm { font-size: clamp(30px, 8vw, 44px); margin-bottom: 6px; text-align: center; }
+.aview[hidden] { display: none; }
+.aview h2 { margin: 6px 0 2px; }
+.aview .sub { margin-bottom: 10px; }
+.aview .sub.note { color: var(--gold); font-size: 14px; }
+.aview .fld { margin-bottom: 8px; }
+.aview input:not([type=checkbox]), .aview select { box-sizing: border-box; width: 100%; min-width: 0; }
+.two > .fld { min-width: 0; }
+.aview select { font: 600 17px var(--f-b); padding: 9px 12px; border-radius: 10px; border: 1px solid var(--line); background: #0d1024; color: inherit; min-width: 0; width: 100%; }
+.aview input:focus, .aview select:focus { outline: 3px solid var(--gold); outline-offset: 1px; }
+.aview input[inputmode=numeric] { letter-spacing: .3em; font-size: 20px; text-align: center; }
+.aview input[inputmode=numeric][type=text] { font-variant-numeric: tabular-nums; }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+@media (max-width: 420px) { .two { grid-template-columns: 1fr; gap: 0; } }
+.chkrow { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 2px 0 8px; }
+.chk { display: inline-flex; align-items: center; gap: 8px; color: var(--mute); font-size: 14px; cursor: pointer; }
+.chk input { width: 20px; height: 20px; accent-color: var(--coral); margin: 0; }
+.chk input:focus { outline: 3px solid var(--gold); outline-offset: 2px; }
+.aerr { min-height: 1.35em; margin: 0 0 8px; color: #ff8a73; font-size: 15px; }
+.aerr:empty { min-height: 0; margin: 0; }
+.btn.link { background: transparent; border-color: transparent; color: var(--mute); text-transform: none; letter-spacing: .02em; font-size: 16px; min-height: 40px; text-decoration: underline; text-underline-offset: 3px; }
+.btn.link:hover { background: transparent; color: var(--sand); }
+.btn[disabled] { opacity: .55; cursor: default; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.chips:empty { display: none; }
+.chip { font: 700 15px var(--f-b); letter-spacing: .04em; padding: 8px 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--ink2); color: var(--sand); cursor: pointer; min-height: 38px; }
+.chip:hover { background: #222850; }
+.chip.on { border-color: var(--coral); background: rgba(255,90,60,.18); }
+.chip:focus { outline: 3px solid var(--gold); outline-offset: 2px; }
+.rlist { display: grid; gap: 8px; margin-bottom: 10px; }
+.rlist .btn { flex-direction: column; align-items: flex-start; gap: 2px; text-transform: none; letter-spacing: .02em; font-size: 17px; margin: 0; text-align: left; }
+.rlist .btn small { color: var(--mute); font-weight: 600; font-size: 14px; letter-spacing: .02em; }
+.aq { margin: 4px 0 12px; padding: 12px 14px; border-radius: 12px; background: var(--ink2); border: 1px solid var(--line); font-size: 18px; }
+/* the "Playing as" line on the main menu */
+.who { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin: -6px 0 12px; color: var(--mute); }
+.who[hidden] { display: none; }
+.who b { color: var(--gold); }
+.who .btn.link { width: auto; margin: 0; min-height: 34px; padding: 2px 6px; font-size: 15px; }
+/* a phone on its side: two columns so the whole form fits without scrolling */
+@media (max-height: 430px) {
+  .logo.sm { display: none; }
+  .aview h2 { margin-top: 0; }
+  .aview .fld { margin-bottom: 4px; }
+  .aview .sub { margin-bottom: 6px; }
+  .chkrow { margin-bottom: 4px; }
+  .aq { margin-bottom: 6px; padding: 8px 12px; }
+  .aview .aerr { margin-bottom: 4px; }
+}
+@media (max-height: 430px) and (min-width: 560px) {
+  #pAuth .card { width: min(640px, 100%); }
+  #aLogin, #aRegister, #aResetNew { display: grid; grid-template-columns: 1fr 1fr; column-gap: 14px; align-items: start; }
+  #aLogin > *, #aRegister > *, #aResetNew > * { grid-column: 1 / -1; }
+  #aLogin > .fld, #aLogin > button.btn:not(.link), #aRegister > .fld, #aRegister > .two, #aRegister > button.btn, #aResetNew > .fld, #aResetNew > .two, #aResetNew > button.btn { grid-column: auto; }
+  #aRegSub, #aLogin > .sub { display: none; }
+  #aLogin > .btn.link, #aLogin > .btn.link[hidden] { grid-column: 1 / -1; }
+}

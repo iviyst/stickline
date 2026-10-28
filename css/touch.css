@@ -1,0 +1,24 @@
+/* touch controls: two floating joysticks. Nothing is drawn where a button would be; the sticks appear under the thumb. */
+#tc { position: absolute; inset: 0; z-index: 1; pointer-events: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+body.notouch #tc { display: none; }
+.tz { position: absolute; top: 0; bottom: 0; width: 50%; pointer-events: auto; touch-action: none; }
+#tzL { left: 0; } #tzR { right: 0; }
+.ghost { position: absolute; bottom: calc(max(14px, env(safe-area-inset-bottom, 0px)) + 16px); width: 112px; height: 112px; border-radius: 50%; border: 2px dashed rgba(255,255,255,.28); background: radial-gradient(circle, rgba(255,255,255,.08) 0 32%, transparent 34%); display: grid; place-items: center; transition: opacity .4s; pointer-events: none; }
+#gL { left: calc(max(16px, env(safe-area-inset-left, 0px)) + 24px); }
+#gR { right: calc(max(16px, env(safe-area-inset-right, 0px)) + 24px); }
+.ghost svg { width: 56px; height: 56px; fill: none; stroke: rgba(255,255,255,.55); stroke-width: 3.2; stroke-linecap: round; stroke-linejoin: round; }
+#tc.usedL #gL, #tc.usedR #gR { opacity: .38; }
+.ghost .cap { position: absolute; left: 50%; bottom: calc(100% + 6px); transform: translateX(-50%); white-space: nowrap; text-align: center; font: 700 12px/1.25 var(--f-b); letter-spacing: .07em; text-transform: uppercase; color: rgba(255,255,255,.92); text-shadow: 0 1px 4px rgba(0,0,0,.7); }
+#tc.usedL:not(.learned) #gL .cap { visibility: visible; }
+#tc.learned #gL .cap { visibility: hidden; }
+#tc.learned #gR .cap { visibility: hidden; }
+#tc.usedR:not(.learned) #gR { opacity: .8; }
+#tc.actL #gL, #tc.actR #gR { opacity: 0 !important; }
+.stick { position: absolute; left: 0; top: 0; width: 120px; height: 120px; opacity: 0; transition: opacity .12s; pointer-events: none; will-change: transform; }
+.stick.on { opacity: 1; }
+.stick .base { position: absolute; inset: 0; border-radius: 50%; background: rgba(12,15,31,.34); border: 2px solid rgba(255,255,255,.34); }
+.stick .knob { position: absolute; left: 32px; top: 32px; width: 56px; height: 56px; border-radius: 50%; background: rgba(245,237,225,.55); border: 2px solid rgba(255,255,255,.78); box-shadow: 0 2px 10px rgba(0,0,0,.35); will-change: transform; }
+.stick.j .knob { background: rgba(255,90,60,.8); border-color: rgba(255,190,170,.95); }
+.stick.d .knob { background: rgba(255,201,74,.85); border-color: rgba(255,236,170,.95); }
+@media (prefers-reduced-motion: reduce) { .ghost, .stick { transition: none; } }
+:focus-visible { outline: 3px solid var(--gold); outline-offset: 2px; }

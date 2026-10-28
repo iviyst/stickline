@@ -1,0 +1,12 @@
+.help { display: grid; grid-template-columns: max-content 1fr; gap: 10px 16px; margin: 14px 0; }
+.help dt { font: 400 13px var(--f-d); letter-spacing: .08em; color: var(--coral); padding-top: 3px; }
+.help dd { margin: 0; }
+kbd { font: 700 14px var(--f-b); padding: 1px 7px; border-radius: 6px; background: var(--ink2); border: 1px solid var(--line); }
+.stats { display: flex; justify-content: space-between; gap: 12px; margin: 14px 0 8px; font-variant-numeric: tabular-nums; }
+.stats div { flex: 1; padding: 10px 12px; border-radius: 12px; background: var(--ink2); border: 1px solid var(--line); }
+.stats small { display: block; color: var(--mute); font-size: 13px; letter-spacing: .08em; text-transform: uppercase; }
+.stats strong { font: 400 22px var(--f-d); }
+#winStars { font-size: 38px; letter-spacing: .1em; text-align: center; margin: 8px 0 4px; }
+#rotHint { display: none; margin: 4px 0 12px; color: var(--mute); font-size: 15px; }
+@media (orientation: portrait) and (pointer: coarse) { #rotHint { display: block; } }
+@media (max-height: 430px) { .card { --pt: 12px; --px: 16px; padding: 12px 16px 6px; } .cardbar { padding: 6px 16px; margin-bottom: 6px; } .cardbar .btn.back { min-height: 36px; margin-bottom: 0; } .logo { font-size: 38px; } .tag { margin: 4px 0 8px; } .sub { margin-bottom: 8px; } h2 { margin-bottom: 2px; } .btn { min-height: 40px; padding: 6px 14px; margin-bottom: 6px; font-size: 17px; } .row2 { gap: 8px; margin-bottom: 6px; } .acts { margin: 8px 0; } }
