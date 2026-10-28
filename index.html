@@ -794,10 +794,10 @@ body.notouch #tc { display: none; }
       <button class="btn pri" id="bFResume">Resume</button>
       <button class="btn" id="bFHelp">Controls</button>
       <div class="fctl" id="fCtl" hidden>
-        <p><b>Keyboard + mouse</b> A D move · W / Space jump (twice for a double jump) · S drop · J or left click light · K or right click heavy · hold L or E to block · U / I specials · O finisher (needs a full meter) · Shift or tap a direction twice to dash.</p>
+        <p><b>Keyboard + mouse</b> A D move · W / Space jump — tap for a short hop, hold for a full jump, press again in the air for a double jump · S fast fall / drop · J or left click light · K or right click heavy · hold L or E to block · U / I specials · O finisher (needs a full meter) · Shift or tap a direction twice to dash.</p>
         <p><b>Controller</b> stick move · A jump · X light · Y heavy · B and RB specials · hold RT block · LB dash · LT finisher · Start pause.</p>
         <p><b>Touch</b> left side: drag to move, pull down to drop, flick up to jump · buttons on the right.</p>
-        <p><b>Tips</b> Block just before a hit lands for a perfect block. Lights chain into heavies and specials. A full meter unlocks your finisher.</p>
+        <p><b>Tips</b> Block just before a hit lands for a perfect block. Lights chain into heavies and specials. A full meter unlocks your finisher. You keep your running speed when you jump, you can steer yourself in the air, and holding a direction while you are being knocked about bends where you land.</p>
       </div>
       <button class="btn" id="bFQuit">Quit to menu</button>
     </div>
@@ -6977,6 +6977,8 @@ const FRULES = { rounds: 3, need: 2, time: 90, introT: 2.4, koT: 2.4 };
 // Units are metres-ish: a fighter is 1.9 tall, the arena is 28 wide, y = 0 is the floor.
 const FightSim = (() => {
   const RUN = 6.4, GRAV = 38, JUMPV = 13.4, DJUMPV = 11.6, MAXFALL = 26, DASHV = 15.5, DASHT = .22, DASHCD = .5;
+  // how movement feels: you build up speed, you skid when you turn, you keep your momentum in the air, and how long you hold jump decides how high you go
+  const ACC = 46, DEC = 26, TURN = 72, AIRACC = 18, AIRDRAG = .55, AIRCAP = 1.18, JSQ = .055, CUTG = 2.1, DI = 3.4;
   const PERFECT = .14, BUFT = .2, CHAIN_T = .5, METER_MAX = 100, GUARD_MAX = 100;
   const clamp = (v, a, b) => (v < a ? a : v > b ? b : v), sgn = (v) => (v < 0 ? -1 : 1), lerp = (a, b, t) => a + (b - a) * t;
   const ELEM = { grv: 'dark', shd: 'dark', mag: 'energy', chr: 'energy', pyr: 'fire', cry: 'ice', vlt: 'volt', ter: 'earth', ven: 'poison', hex: 'dark', hyp: 'energy', drn: 'dark', tit: 'earth', spd: 'energy', bld: 'energy', rbr: 'energy', bst: 'energy', slm: 'poison', ins: 'poison', drg: 'fire' };
@@ -7023,8 +7025,10 @@ const FightSim = (() => {
       i, name: p.name || ('P' + (i + 1)), bot: !!p.bot, level: p.level || 1, style: st, wm, mv: build(st, wm), col: p.col || st.col, voice: 90 + (i * 37 + st.id.charCodeAt(0) * 7) % 70,
       x: 0, y: 0, vx: 0, vy: 0, face: 1, sc: 1, hp: st.hp, maxhp: st.hp, meter: 0, guard: GUARD_MAX, alive: true, onGround: true, jumps: 0, airDash: false,
       act: null, hs: 0, down: 0, getup: 0, dash: null, dashCd: 0, rec: 0, launched: false, dizzy: false, locked: -1, lockA: null, tow: null, dropT: 0,
-      blocking: false, blockT: 0, bs: 0, gt: 9, inv: 0, chain: 0, chainT: 9, cd: { sp1: 0, sp2: 0 }, fx: {}, buf: [], inp: { mx: 0, dn: false, block: false }, cmb: { n: 0, air: 0, dmg: 0, by: -1 }, combo: { n: 0, dmg: 0, t: 0 },
-      buffs: {}, wins: 0, kills: 0, dmgDealt: 0, state: 'idle', stT: 0, tsc: 1, spdM: 1, dmM: 1, takeM: 1, hpFlash: 0
+      blocking: false, blockT: 0, bs: 0, gt: 9, inv: 0, chain: 0, chainT: 9, cd: { sp1: 0, sp2: 0 }, fx: {}, buf: [], inp: { mx: 0, dn: false, block: false, jh: false }, cmb: { n: 0, air: 0, dmg: 0, by: -1 }, combo: { n: 0, dmg: 0, t: 0 },
+      buffs: {}, wins: 0, kills: 0, dmgDealt: 0, state: 'idle', stT: 0, tsc: 1, spdM: 1, dmM: 1, takeM: 1, hpFlash: 0,
+      // --- motion feel: jump squat, variable jump height, skid, landing squash (read by the renderer) ---
+      jsq: 0, jsqDbl: false, cut: false, land: 0, landQ: 0, airT: 0, skid: 0, ax: 0, turn: 0
     };
   }
 
@@ -7033,7 +7037,8 @@ const FightSim = (() => {
     const n = S.fighters.length, xs = n === 2 ? [-4.5, 4.5] : n === 3 ? [-6, 0, 6] : n === 4 ? [-7.5, -2.6, 2.6, 7.5] : [0];
     S.fighters.forEach((f, i) => {
       Object.assign(f, { x: xs[i], y: 0, vx: 0, vy: 0, face: xs[i] > 0 ? -1 : 1, hp: f.maxhp, guard: GUARD_MAX, alive: true, onGround: true, jumps: 0, act: null, hs: 0, down: 0, getup: 0, dash: null, dashCd: 0, rec: 0, launched: false, dizzy: false,
-        locked: -1, lockA: null, tow: null, blocking: false, blockT: 0, bs: 0, gt: 9, inv: 0, chain: 0, chainT: 9, fx: {}, buf: [], buffs: {}, sc: 1, cmb: { n: 0, air: 0, dmg: 0, by: -1 }, combo: { n: 0, dmg: 0, t: 0 }, state: 'idle', stT: 0, hpFlash: 0 });
+        locked: -1, lockA: null, tow: null, blocking: false, blockT: 0, bs: 0, gt: 9, inv: 0, chain: 0, chainT: 9, fx: {}, buf: [], buffs: {}, sc: 1, cmb: { n: 0, air: 0, dmg: 0, by: -1 }, combo: { n: 0, dmg: 0, t: 0 }, state: 'idle', stT: 0, hpFlash: 0,
+        jsq: 0, jsqDbl: false, cut: false, land: 0, landQ: 0, airT: 0, skid: 0, ax: 0, turn: 0 });
       f.cd.sp1 = f.cd.sp2 = 0; f.meter = first ? 0 : Math.min(f.meter * .5, 50);
     });
     S.projs.length = 0; S.traps.length = 0; S.phase = 'intro'; S.pt = 0; S.timer = FRULES.time; S.slow = 1; S.frz = 0; S.lockN = 0; S.rw = -2;
@@ -7130,7 +7135,7 @@ const FightSim = (() => {
       if (ky > 0 && (launch || !v.onGround)) { v.vy = ky; v.onGround = false; } else if (ky < 0 && !v.onGround) v.vy = ky; else if (ky > 0) { v.vy = ky; v.onGround = false; }
       v.launched = v.launched || launch;
       const base = hd.st * Math.max(.4, 1 - .07 * n) * (air < 1 ? .6 : 1);
-      v.hs = Math.max(base, v.fx.shock ? v.hs : 0); v.act = null; v.dash = null; v.dizzy = false; v.blocking = false; v.rec = 0;
+      v.hs = Math.max(base, v.fx.shock ? v.hs : 0); v.act = null; v.dash = null; v.dizzy = false; v.blocking = false; v.rec = 0; v.jsq = 0; v.cut = false;
       v.chain = 0;
     }
     const big = hd.final ? 3 : (hd.launch || hd.ky >= 6) ? 2 : heavyKind ? 1 : 0;
@@ -7140,8 +7145,16 @@ const FightSim = (() => {
     else if (v.hp <= 0 && status === 'lock') v.hp = 1;   // a locked rival is finished by the final lock hit
     return status;
   }
+  // whoever this fighter was holding in a finisher lock goes free (a third fighter can KO the one doing the holding)
+  function freeLock(S, f) {
+    if (!f.lockA) return;
+    const held = S.fighters[f.lockA.v];
+    if (held && held.locked === f.i) { held.locked = -1; held.launched = false; held.hs = Math.max(held.hs, .2); }
+    f.lockA = null; S.lockN = Math.max(0, S.lockN - 1); emit(S, { e: 'lockend', f: f.i, v: held ? held.i : -1 });
+  }
   function koFighter(S, a, v, hd, dirx) {
-    v.hp = 0; v.alive = false; v.act = null; v.dash = null; v.blocking = false; v.hs = 0; v.lockA = null; v.locked = -1; v.tow = null; v.launched = true; v.inv = 0;
+    freeLock(S, v);
+    v.hp = 0; v.alive = false; v.act = null; v.dash = null; v.blocking = false; v.hs = 0; v.jsq = 0; v.cut = false; v.lockA = null; v.locked = -1; v.tow = null; v.launched = true; v.inv = 0;
     v.vx = (dirx || 1) * clamp(Math.abs(hd.kx || 6), 6, 13); v.vy = Math.max(hd.ky || 0, 9); v.onGround = false; v.state = 'ko'; a.kills++; S.lastKO = v.i;
     S.frz = Math.max(S.frz, .35); S.shake = Math.max(S.shake, 1);
     emit(S, { e: 'ko', v: v.i, by: a.i, x: v.x, y: v.y + 1 });
@@ -7319,9 +7332,15 @@ const FightSim = (() => {
       f.vx = clamp((f.tow.x - f.x) * 10, -14, 14); f.tow.t -= dt; if (f.tow.t <= 0) f.tow = null;
     }
     if (!f.onGround) {
+      f.airT += dt;
       const fast = f.inp.dn && f.vy < 2 && f.alive && f.hs <= 0 && !f.act && !f.launched;
-      f.vy = Math.max(-MAXFALL, f.vy - GRAV * (fast ? 1.9 : 1) * dt);
-    }
+      // let go of jump on the way up and you stop climbing: a tap is a hop, a hold is a full jump
+      const cut = f.cut && f.vy > 0 && !f.inp.jh && !f.launched && f.hs <= 0;
+      if (f.vy <= 0) f.cut = false;
+      f.vy = Math.max(-MAXFALL, f.vy - GRAV * (fast ? 1.9 : cut ? CUTG : 1) * dt);
+      // directional influence: steer your own knockback a little while you are being flung about
+      if ((f.launched || f.hs > 0) && f.alive && Math.abs(f.inp.mx) > .2) f.vx += sgn(f.inp.mx) * DI * dt;
+    } else f.airT = 0;
     f.x += f.vx * dt; f.y += f.vy * dt;
     if (f.x < -FW + .4) { f.x = -FW + .4; if (f.launched && f.vx < -4) f.vx = -f.vx * .35; else f.vx = Math.max(0, f.vx); }
     if (f.x > FW - .4) { f.x = FW - .4; if (f.launched && f.vx > 4) f.vx = -f.vx * .35; else f.vx = Math.min(0, f.vx); }
@@ -7333,6 +7352,7 @@ const FightSim = (() => {
       f.y = land;
       if (!wasGround) {
         const q = clamp(-f.vy / 18, .1, 1);
+        f.land = .22 + q * .12; f.landQ = q; f.cut = false;   // the renderer squashes the legs on impact
         f.vy = 0; f.onGround = true; f.jumps = 0; f.airDash = false;
         if (f.launched) {
           f.launched = false; f.vx *= .3;
@@ -7355,6 +7375,9 @@ const FightSim = (() => {
     if (f.hpFlash > 0) f.hpFlash -= dt;
     if (f.inv > 0) f.inv -= dt;
     if (f.rec > 0) f.rec -= dt;
+    if (f.land > 0) f.land -= dt;
+    f.ax *= Math.pow(.05, dt);
+    if (f.jsq > 0) { if (f.act || f.hs > 0 || f.dash || !f.onGround) f.jsq = 0; else { f.jsq -= dt; f.vx *= Math.pow(.02, dt); if (f.jsq <= 0) doJump(S, f, false); } }
     f.chainT += dt; if (f.chainT > CHAIN_T) f.chain = 0;
     if (f.gt < 9) f.gt += dt;
     if (!f.alive) { physics(S, f, dt); return; }
@@ -7376,7 +7399,11 @@ const FightSim = (() => {
     }
     if (f.dotT > .5) { f.dotT = 0; emit(S, { e: 'dot', v: f.i, x: f.x, y: f.y + 1 }); }
     if (f.meter < METER_MAX) f.meterFull = false;
-    if (f.locked >= 0) { f.state = 'locked'; return; }
+    if (f.locked >= 0) {
+      const by = S.fighters[f.locked];
+      if (!by || !by.lockA || by.lockA.v !== f.i) { f.locked = -1; f.hs = Math.max(f.hs, .2); }   // the holder is gone: never leave anyone stuck
+      else { f.state = 'locked'; return; }
+    }
     if (f.lockA) { f.state = 'lockA'; tickLock(S, f, dt); return; }
     // guard regenerates when you are not being hit
     if (f.blocking) { if (f.gt > .7) f.guard = Math.min(GUARD_MAX, f.guard + 5 * dt); } else if (f.gt > .8) f.guard = Math.min(GUARD_MAX, f.guard + 20 * dt);
@@ -7406,11 +7433,26 @@ const FightSim = (() => {
       if (f.dash.t >= DASHT) { f.dash = null; f.vx *= .3; }
     }
     // walking and jumping control
-    if (playing && !f.act && !f.dash && f.rec <= 0 && !f.fx.freeze) {
-      const sp = RUN * f.style.spd * f.spdM * (f.blocking ? .3 : 1), tgt = f.blocking ? mx * sp : mx * sp;
-      f.vx += (tgt - f.vx) * Math.min(1, (f.onGround ? 16 : 6) * dt);
-      f.state = !f.onGround ? (f.vy > 0 ? 'jump' : 'fall') : f.blocking ? 'block' : Math.abs(mx) > .15 ? 'run' : 'idle';
-    } else if (!f.act && !f.dash) f.state = f.alive ? (f.rec > 0 ? 'recover' : f.onGround ? 'idle' : 'fall') : 'ko';
+    if (playing && !f.act && !f.dash && f.rec <= 0 && !f.fx.freeze && f.jsq <= 0) {
+      const sp = RUN * f.style.spd * f.spdM * (f.blocking ? .3 : 1), tgt = mx * sp, v0 = f.vx;
+      if (f.onGround) {
+        // pressing forward builds speed, letting go coasts to a stop, and turning round digs the heels in (a skid)
+        const turning = Math.abs(mx) > .15 && sgn(mx) !== sgn(f.vx) && Math.abs(f.vx) > 1.2;
+        const rate = Math.abs(mx) < .15 ? DEC : turning ? TURN : ACC;
+        const d = tgt - f.vx, step = rate * dt;
+        f.vx = Math.abs(d) <= step ? tgt : f.vx + sgn(d) * step;
+        if (turning) { f.skid = .18; f.turn = sgn(mx); }
+      } else {
+        // in the air you keep the momentum you jumped with and only steer it
+        const cap = sp * AIRCAP, d = tgt - f.vx, step = AIRACC * dt * Math.abs(mx);
+        if (Math.abs(mx) > .12) f.vx = Math.abs(d) <= step ? tgt : f.vx + sgn(d) * step;
+        if (Math.abs(f.vx) > cap) f.vx += (sgn(f.vx) * cap - f.vx) * Math.min(1, AIRDRAG * dt * 4);
+      }
+      f.ax += ((f.vx - v0) / Math.max(dt, .0001) - f.ax) * Math.min(1, dt * 18);   // smoothed, so the limbs lag rather than jitter
+      f.state = !f.onGround ? (f.vy > 0 ? 'jump' : 'fall') : f.blocking ? 'block' : f.skid > 0 ? 'skid' : Math.abs(mx) > .15 ? 'run' : 'idle';
+    } else if (f.jsq > 0) f.state = 'jumpsquat';
+    else if (!f.act && !f.dash) f.state = f.alive ? (f.rec > 0 ? 'recover' : f.onGround ? 'idle' : 'fall') : 'ko';
+    if (f.skid > 0) { f.skid -= dt; if (f.onGround && f.state === 'run' && Math.abs(f.vx) > 1.2 && sgn(f.vx) !== f.turn) f.state = 'skid'; }
     if (f.act && f.act.m.kind === 'L' && f.act.ph === 0) f.vx *= Math.pow(.01, dt);
     if (f.dashCd > 0) f.dashCd -= dt;
     physics(S, f, dt);
@@ -7438,18 +7480,25 @@ const FightSim = (() => {
     if (cmd === 'fin') return f.meter >= METER_MAX ? M.fin : null;
     return null;
   }
+  function doJump(S, f, dbl) {
+    f.vy = (dbl ? DJUMPV : JUMPV) * f.style.jmp * (f.buffs.giant ? .92 : 1);
+    f.onGround = false; f.jumps = dbl ? 2 : 1; f.dash = null; f.cut = true; f.jsq = 0; f.airT = 0;
+    emit(S, { e: 'jump', f: f.i, dbl, x: f.x, y: f.y });
+  }
   function processBuf(S, f) {
     f.buf = f.buf.filter((b) => S.t - b.t <= BUFT);
     if (!f.buf.length || f.fx.freeze) return;
     for (let i = 0; i < f.buf.length; i++) {
       const cmd = f.buf[i].k;
       if (cmd === 'jump') {
-        if (f.act || f.rec > 0) continue;
+        if (f.act || f.rec > 0 || f.jsq > 0) continue;
         if (f.inp.dn && f.onGround && supportY(S, f) > 0) { f.dropT = .3; f.onGround = false; f.y -= .05; f.vy = -1; f.buf.splice(i, 1); return; }
         if (f.onGround || f.jumps < 2) {
           const dbl = !f.onGround; if (dbl && f.jumps >= 2) continue;
-          f.vy = (dbl ? DJUMPV : JUMPV) * f.style.jmp * (f.buffs.giant ? .92 : 1); f.onGround = false; f.jumps = dbl ? 2 : 1; f.dash = null;
-          emit(S, { e: 'jump', f: f.i, dbl, x: f.x, y: f.y }); f.buf.splice(i, 1); return;
+          f.buf.splice(i, 1);
+          if (dbl) { doJump(S, f, true); return; }
+          f.jsq = JSQ; f.jsqDbl = false; f.dash = null;   // a few frames of crouch before you leave the ground, so the jump has a wind-up
+          return;
         }
         continue;
       }
@@ -7533,7 +7582,7 @@ const FightSim = (() => {
   }
 
   const API = {
-    setIn(i, v) { const f = this.fighters[i]; if (f) { f.inp.mx = clamp(v.mx || 0, -1, 1); f.inp.dn = !!v.dn; f.inp.block = !!v.block; } },
+    setIn(i, v) { const f = this.fighters[i]; if (f) { f.inp.mx = clamp(v.mx || 0, -1, 1); f.inp.dn = !!v.dn; f.inp.block = !!v.block; f.inp.jh = !!v.jh; } },
     press(i, k) { const f = this.fighters[i]; if (f && f.alive) { f.buf.push({ k, t: this.t }); if (f.buf.length > 6) f.buf.shift(); } },
     drain() { const e = this.ev; this.ev = []; return e; },
     step(dt) {
@@ -7587,10 +7636,10 @@ const FightAI = (() => {
       B.t -= dt; B.blk -= dt;
       if (B.rz > 0) { B.rz -= dt; if (B.rz <= 0) B.blk = .3; }   // a timed guard: raised a few frames before the hit lands, so it counts as a perfect block
       if (!f.alive || S.phase !== 'fight') { S.setIn(f.i, { mx: 0, block: false }); continue; }
-      if (B.t > 0) { S.setIn(f.i, { mx: B.mx, dn: B.dn, block: B.blk > 0 }); continue; }
+      if (B.t > 0) { S.setIn(f.i, { mx: B.mx, dn: B.dn, block: B.blk > 0, jh: true }); continue; }
       const L = LV[f.level] || LV[2]; B.t = L.ti * (.8 + S.rnd() * .4);
       think(S, f, B, L);
-      S.setIn(f.i, { mx: B.mx, dn: B.dn, block: B.blk > 0 });
+      S.setIn(f.i, { mx: B.mx, dn: B.dn, block: B.blk > 0, jh: true });
     }
   }
   function think(S, f, B, L) {
@@ -7935,7 +7984,15 @@ const FRig = (() => {
     dizzy: P({ lean: 10, head: 10, ru: 10, rf: 20, lu: 6, lf: 18, rt: 16, rs: 4, lt: -12, ls: -4 }),
     locked:P({ lean: -26, head: -28, ru: -40, rf: -10, lu: -30, lf: 10, rt: 14, rs: 6, lt: -8, ls: 4 }),
     win:   P({ lean: -4, ru: 176, rf: 178, lu: 40, lf: 100, rt: 22, rs: 8, lt: -20 }),
-    recover: P({ lean: 10, ru: 50, rf: 100, lu: 32, lf: 90, rt: 26, rs: 12, lt: -20 })
+    recover: P({ lean: 10, ru: 50, rf: 100, lu: 32, lf: 90, rt: 26, rs: 12, lt: -20 }),
+    // the crouch that loads a jump: knees bent, arms swung back ready to throw up
+    jumpsquat: P({ lean: 16, head: -6, ru: -34, rf: -4, lu: -40, lf: -12, rt: 52, rs: 46, lt: -46, ls: 44 }),
+    // the moment you leave the ground: everything thrown upward
+    takeoff: P({ lean: -4, head: 4, ru: 150, rf: 172, lu: 140, lf: 168, rt: 10, rs: -24, lt: -16, ls: -42 }),
+    // absorbing a landing: knees give, arms come out for balance
+    land:  P({ lean: 18, head: -8, ru: 10, rf: 70, lu: -8, lf: 56, rt: 56, rs: 52, lt: -50, ls: 48 }),
+    // digging the heels in to turn around at speed
+    skid:  P({ lean: -16, head: 8, ru: -46, rf: -16, lu: 86, lf: 128, rt: 64, rs: 30, lt: -40, ls: 10 })
   };
   const mix = (a, b, t) => { const o = {}; for (const k of KEYS) o[k] = a[k] + (b[k] - a[k]) * t; return o; };
   const ease = (t) => (t = clamp(t, 0, 1), t * t * (3 - 2 * t)), snap = (t) => (t = clamp(t, 0, 1), 1 - (1 - t) * (1 - t));
@@ -7949,22 +8006,45 @@ const FRig = (() => {
       if (m.a === 'spin') { const p = mix(an[0], an[1], .5); p.tw = t * 1500; return p; }
       let p;
       const stance = f.onGround ? STANCE : STATES.jump;
-      if (t < T0) p = mix(stance, an[0], ease(t / Math.max(.001, T0)));
-      else if (t < T1) { const u = (t - T0) / Math.max(.001, m.t[1]); p = mix(an[0], an[1], snap(Math.min(1, u * (m.hs || m.rep || m.k === 'beam' ? 6 : 3.2)))); if (m.hs || m.rep) p.tw += Math.sin(t * 38) * 14; if (m.k === 'beam') p.lean += Math.sin(t * 30) * 2; }
-      else p = mix(an[1], stance, ease((t - T1) / Math.max(.001, TT - T1)));
+      // wind up past the pose (a coil), snap through the strike and overshoot a little, then unwind back to stance
+      if (t < T0) { const u = t / Math.max(.001, T0); p = mix(stance, an[0], ease(u) * (1 + .09 * Math.sin(Math.PI * Math.min(1, u * 1.15)))); }
+      else if (t < T1) {
+        const u = (t - T0) / Math.max(.001, m.t[1]), k = snap(Math.min(1, u * (m.hs || m.rep || m.k === 'beam' ? 6 : 3.2)));
+        p = mix(an[0], an[1], k * (1 + .07 * Math.max(0, 1 - Math.abs(k - .8) * 5)));
+        if (m.hs || m.rep) p.tw += Math.sin(t * 38) * 14;
+        if (m.k === 'beam') p.lean += Math.sin(t * 30) * 2;
+      } else { const u = (t - T1) / Math.max(.001, TT - T1); p = mix(an[1], stance, ease(u) * (1 + .05 * Math.sin(Math.PI * u))); }
       return p;
     }
     if (f.lockA) {
       const L = f.lockA, an = LOCKP[f.style.fam] || LOCKP.fist, ts = (L.t * L.n / Math.max(.3, L.dur)) % 1, k = an[L.i % 2], pose = ANIM[k];
       const p = mix(pose[0], pose[1], snap(ts * 2.4)); p.lean += 6; return p;
     }
+    if (st === 'jumpsquat') { const u = ease(1 - (f.jsq || 0) / .055); return mix(f.onGround ? STANCE : STANCE, STATES.jumpsquat, .35 + u * .65); }
+    if (st === 'skid') {
+      const sp = Math.min(1, Math.abs(f.vx) / 6.4), p = mix(STANCE, STATES.skid, .45 + sp * .55);
+      p.tw += (f.turn || 1) * f.face * -18 * sp; return p;
+    }
     if (st === 'run') {
       const sp = Math.min(1, Math.abs(f.vx) / 6.4), back = (f.vx * f.face) < -.3, ph = rig.run, s = Math.sin(ph), c = Math.cos(ph);
-      const o = P({ lean: back ? 2 : 14 + 6 * sp, rt: 46 * s * sp + 6, lt: -46 * s * sp + 6, ru: 62 - 34 * s * sp, lu: 38 + 34 * s * sp });
-      o.rs = o.rt - 8 - 58 * Math.max(0, -c) * sp; o.ls = o.lt - 8 - 58 * Math.max(0, c) * sp; o.rf = o.ru + 52; o.lf = o.lu + 60; return o;
+      const o = P({ lean: back ? 2 : 12 + 8 * sp, rt: 50 * s * sp + 6, lt: -50 * s * sp + 6, ru: 62 - 40 * s * sp, lu: 38 + 40 * s * sp });
+      o.rs = o.rt - 8 - 62 * Math.max(0, -c) * sp; o.ls = o.lt - 8 - 62 * Math.max(0, c) * sp; o.rf = o.ru + 52; o.lf = o.lu + 60;
+      o.tw = -s * 11 * sp; o.head = -c * 5 * sp;                       // the shoulders counter-rotate against the hips, the head rides along
+      return o;
     }
-    if (st === 'idle') { const b = Math.sin(time * 3.2 + f.i), p = mix(STANCE, STANCE, 0); p.lean += b * 1.5; p.ru += b * 3; p.rf += b * 3; p.lu -= b * 3; return p; }
-    if (st === 'jump' || st === 'fall') { const p = Object.assign({}, STATES[st]); if (f.jumps >= 2) { p.tw = time * 900; p.rt = 110; p.rs = -90; p.lt = 90; p.ls = -100; p.lean = 30; } return p; }
+    if (st === 'idle') {
+      const b = Math.sin(time * 3.2 + f.i), b2 = Math.sin(time * 1.7 + f.i * 2), p = Object.assign({}, STANCE);
+      p.lean += b * 1.5; p.ru += b * 3; p.rf += b * 3; p.lu -= b * 3; p.lf -= b * 2;
+      p.head += b2 * 2.5; p.tw += b2 * 3; p.rt += b * .8; p.lt -= b * .8;   // weight shifts from foot to foot while standing
+      return p;
+    }
+    if (st === 'jump' || st === 'fall') {
+      let p = Object.assign({}, STATES[st]);
+      if (st === 'jump' && f.airT < .17) p = mix(STATES.takeoff, p, ease(f.airT / .17));   // the body unfolds out of the jump
+      if (f.jumps >= 2) { p.tw = time * 900; p.rt = 110; p.rs = -90; p.lt = 90; p.ls = -100; p.lean = 30; }
+      else if (st === 'fall') { const d = clamp(-f.vy / 20, 0, 1); p.lean += d * 6; p.ru += d * 14; p.lu += d * 12; p.rt -= d * 10; p.lt -= d * 6; }
+      return p;
+    }
     if (st === 'dizzy') { const p = Object.assign({}, STATES.dizzy); p.lean += Math.sin(time * 6) * 12; p.head += Math.sin(time * 5) * 14; return p; }
     if (st === 'getup') { return mix(STATES.down, STANCE, ease(1 - f.getup / .3)); }
     if (st === 'ko') return f.onGround ? STATES.down : STATES.launch;
@@ -8059,9 +8139,34 @@ const FRig = (() => {
 
   // ---- pose -> skeleton ----
   function apply(R, dt, time) {
-    const f = R.f, tgt = poseFor(f, time, R);
-    const k = f.act || f.lockA ? 1 - Math.exp(-dt * 42) : 1 - Math.exp(-dt * 20);
-    const p = R.pose; for (const key of KEYS) p[key] += (tgt[key] - p[key]) * k;
+    const f = R.f;
+    const tgt = poseFor(f, time, R);
+    // landing absorb: the knees give under you for a moment after you touch down, on top of whatever else you are doing
+    if (f.land > 0 && f.onGround && !f.act && !f.lockA && f.hs <= 0 && f.alive) {
+      const u = clamp(f.land / .34, 0, 1), amt = clamp(f.landQ, .2, 1) * (u > .72 ? (1 - u) / .28 : u / .72) * .85;
+      for (const key of KEYS) tgt[key] = tgt[key] + (STATES.land[key] - tgt[key]) * amt;
+    }
+    // limbs lag behind a sudden change of speed and then catch up (secondary motion)
+    const lag = clamp((f.ax || 0) / 90, -1, 1) * f.face;
+    if (f.alive && !f.lockA) { tgt.head -= lag * 7; tgt.lean -= lag * 4; tgt.ru -= lag * 5; tgt.lu -= lag * 5; }
+    // a critically-ish damped spring per joint: limbs overshoot a touch and settle instead of snapping to the pose
+    const p = R.pose, pv = R.pv || (R.pv = {});
+    const hard = !!(f.act || f.lockA), stiff = hard ? 1500 : f.state === 'hurt' || f.state === 'launch' ? 420 : 620, zeta = hard ? .86 : .68;
+    const c = 2 * Math.sqrt(stiff) * zeta;
+    let left = Math.min(dt, .1);
+    while (left > 0) {                                     // small steps keep the spring stable at any frame rate
+      const h = Math.min(left, 1 / 120); left -= h;
+      for (const key of KEYS) {
+        const v = (pv[key] || 0) + (stiff * (tgt[key] - p[key]) - c * (pv[key] || 0)) * h;
+        pv[key] = v; p[key] += v * h;
+      }
+    }
+    // squash and stretch: compress into a jump, stretch while climbing, flatten on impact
+    let sqT = 1;
+    if (f.jsq > 0) sqT = .87;
+    else if (f.land > 0 && f.onGround) sqT = 1 - clamp(f.landQ, .2, 1) * .17 * clamp(f.land / .34, 0, 1);
+    else if (!f.onGround && f.alive) sqT = 1 + clamp(f.vy / 150, -.05, .1);
+    R.sq = (R.sq || 1) + (sqT - (R.sq || 1)) * Math.min(1, dt * (sqT < 1 ? 34 : 15));
     if (f.state === 'run') R.run += dt * clamp(Math.abs(f.vx), 1, 7.5) * 1.5 * (f.vx * f.face < 0 ? -.8 : 1);
     const s = f.sc, lean = p.lean * D, SIN = Math.sin, COS = Math.cos;
     const dir = (a, len) => [SIN(a * D) * len, -COS(a * D) * len];
@@ -8094,7 +8199,8 @@ const FRig = (() => {
     }
     // placement in the arena
     const r = R.root;
-    r.position.set(f.x, f.y + (f.state === 'locked' ? 0 : 0), 0); r.scale.setScalar(s);
+    const sq = R.sq || 1, wide = 1 + (1 - sq) * .75;   // squashing down spreads out sideways, and the other way round
+    r.position.set(f.x, f.y, 0); r.scale.set(s * wide, s * sq, s * wide);
     const wantYaw = f.face > 0 ? -.38 : Math.PI + .38; let dy = wantYaw - R.yaw; while (dy > Math.PI) dy -= Math.PI * 2; while (dy < -Math.PI) dy += Math.PI * 2;
     R.yaw += dy * (1 - Math.exp(-dt * 18)); r.rotation.y = R.yaw;
     // tumbling when launched
@@ -8476,6 +8582,8 @@ const FightView = (() => {
     const use = focus || all;
     for (const f of use) { minx = Math.min(minx, f.x); maxx = Math.max(maxx, f.x); miny = Math.min(miny, f.y); maxy = Math.max(maxy, f.y); }
     let tx = (minx + maxx) / 2, spread = maxx - minx + 6.5, zoomT = 0;
+    // lead the action a little: the camera drifts the way the fighters are travelling instead of trailing them
+    if (!focus && S.phase === 'fight') { let vx = 0; for (const f of use) vx += f.vx; tx += clamp(vx / Math.max(1, use.length) * .13, -1.8, 1.8); }
     if (S.frz > .05 && S.ev && S.fighters.some((f) => f.act && f.act.m.kind === 'fin' && f.act.t < .02)) zoomT = 1;
     if (focus) zoomT = Math.max(zoomT, 1);
     if (S.phase === 'ko') { const k = S.fighters[S.lastKO]; if (k && S.pt < 1.8) { tx = lerp(tx, k.x, .5); zoomT = Math.max(zoomT, .55); } }
@@ -8520,6 +8628,12 @@ const FightView = (() => {
       if (f.buffs.rage && Math.random() < .4) puff(f.x, f.y + 1, 0, { n: 1, col: '#ff3b3b', spd: 1.5, size: .2, life: .5, grav: -3 });
       if (f.buffs.haste && Math.abs(f.vx) > 3 && Math.random() < .6) puff(f.x - f.face * .3, f.y + 1, 0, { n: 1, col: '#3affd2', spd: .5, size: .3, life: .3, grav: 0 });
       if (f.state === 'launch' && Math.random() < .6) puff(f.x, f.y + 1, 0, { n: 1, col: f.style.col2, spd: .5, size: .2, life: .3, grav: 0 });
+      // dust kicked up by the feet: a little while running, a lot while skidding to a stop
+      if (f.onGround && f.alive) {
+        if (f.state === 'skid') puff(f.x + f.face * .2, f.y + .06, 0, { n: 2, col: '#c6c6d4', spd: 2.6, size: .2, life: .4, grav: -.3, dirx: -Math.sign(f.vx) * 2.5, spread: .9, ang: f.vx > 0 ? Math.PI : 0 });
+        else if (f.state === 'run' && Math.abs(f.vx) > 3.4 && Math.random() < .5) puff(f.x - Math.sign(f.vx) * .25, f.y + .05, 0, { n: 1, col: '#b4b4c4', spd: 1.1, size: .15, life: .3, grav: -.3, spread: 1.2, ang: Math.PI / 2 });
+        else if (f.jsq > 0 && Math.random() < .5) puff(f.x, f.y + .05, 0, { n: 1, col: '#b8b8c8', spd: .8, size: .14, life: .25, grav: -.4, spread: 1.6, ang: Math.PI / 2 });
+      }
       actVfx(f, R);
     }
     beamUpdate(dt); stepProjViews(dt); stepFx(dt);
@@ -8542,16 +8656,16 @@ const FightView = (() => {
 'use strict';
 // FInput: the Fight Arena's own controls.  Keyboard + mouse, game controller and touch all end up as the same thing: held directions (move / down / block)
 // and button presses (jump, light, heavy, sp1, sp2, fin, dash) that Fight hands to the simulation.
-//   Keyboard  A D / arrows move · W, Up, Space jump · S, Down drop / fast-fall · J light · K heavy · L or E hold to block · U or Q special 1 · I or R special 2 · O or F finisher · Shift dash (or tap a direction twice)
+//   Keyboard  A D / arrows move · W, Up, Space jump (tap for a short hop, hold for a full jump) · S, Down drop / fast-fall · J light · K heavy · L or E hold to block · U or Q special 1 · I or R special 2 · O or F finisher · Shift dash (or tap a direction twice)
 //   Mouse     left click light · right click heavy · middle click dash
 //   Pad       stick or D-pad move · A jump · X light · Y heavy · B special 1 · RB special 2 · RT hold to block · LB dash · LT finisher · Start pause
 //   Touch     floating stick on the left (pull down to drop, flick up to jump) · buttons on the right
 const FInput = (() => {
   const KEY = { KeyA: 'left', ArrowLeft: 'left', KeyD: 'right', ArrowRight: 'right', KeyS: 'down', ArrowDown: 'down', KeyW: 'jump', ArrowUp: 'jump', Space: 'jump',
     KeyJ: 'light', KeyK: 'heavy', KeyL: 'block', KeyE: 'block', KeyU: 'sp1', KeyQ: 'sp1', KeyI: 'sp2', KeyR: 'sp2', KeyO: 'fin', KeyF: 'fin', ShiftLeft: 'dash', ShiftRight: 'dash' };
-  const HOLD = { left: 1, right: 1, down: 1, block: 1 };
+  const HOLD = { left: 1, right: 1, down: 1, block: 1, jump: 1 };   // jump is held as well as pressed: a tap is a short hop, holding it is a full jump
   let on = false, q = [], held = {}, tapT = { left: -9, right: -9 }, root = null;
-  const mouse = { block: false }, pad = { prev: {}, id: -1, name: '' }, touch = { mx: 0, dn: false, block: false, joy: -1, ox: 0, oy: 0, upArm: true, btn: {} };
+  const mouse = { block: false }, pad = { prev: {}, id: -1, name: '' }, touch = { mx: 0, dn: false, block: false, jh: 0, joy: -1, ox: 0, oy: 0, upArm: true, btn: {} };
   const press = (k) => { if (q.length < 8) q.push(k); };
   const inField = (t) => t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT');
 
@@ -8560,13 +8674,14 @@ const FInput = (() => {
     const a = KEY[e.code]; if (!a) return;
     e.preventDefault(); if (e.repeat) return;
     if (HOLD[a]) {
-      held[a] = true;
+      const was = held[a]; held[a] = true;
+      if (a === 'jump') { if (!was) press('jump'); return; }
       if (a === 'left' || a === 'right') { const t = performance.now(); if (t - tapT[a] < 240) press('dash'); tapT[a] = t; }
       if (a === 'down') { /* drop-through: down + jump */ }
     } else press(a);
   });
   addEventListener('keyup', (e) => { const a = KEY[e.code]; if (a && HOLD[a]) held[a] = false; });
-  addEventListener('blur', () => { held = {}; touch.mx = 0; touch.dn = false; touch.block = false; });
+  addEventListener('blur', () => { held = {}; touch.mx = 0; touch.dn = false; touch.block = false; touch.jh = 0; });
   addEventListener('contextmenu', (e) => { if (on) e.preventDefault(); });
   addEventListener('mousedown', (e) => {
     if (!on || (e.target.closest && e.target.closest('button, .fbtn, #fTouch'))) return;
@@ -8590,14 +8705,15 @@ const FInput = (() => {
       knob.style.transform = 'translate(' + dx + 'px,' + dy + 'px)';
       const nx = dx / 40; touch.mx = Math.abs(nx) < .22 ? 0 : Math.max(-1, Math.min(1, nx)); touch.dn = dy > 34;
       if (dy < -40 && touch.upArm) { touch.upArm = false; press('jump'); } else if (dy > -16) touch.upArm = true;
+      touch.jh = dy < -30 ? 1 : touch.jh;
       if (Math.abs(e.clientX - touch.ox) > 90) { touch.ox += (e.clientX - touch.ox) - Math.sign(e.clientX - touch.ox) * 90; }
     });
-    const end = (e) => { if (e.pointerId !== touch.joy) return; touch.joy = -1; touch.mx = 0; touch.dn = false; stick.classList.remove('on'); };
+    const end = (e) => { if (e.pointerId !== touch.joy) return; touch.joy = -1; touch.mx = 0; touch.dn = false; touch.jh = 0; stick.classList.remove('on'); };
     zone.addEventListener('pointerup', end); zone.addEventListener('pointercancel', end);
     el.querySelectorAll('.fbtn').forEach((b) => {
       const k = b.dataset.k, hold = k === 'block';
-      b.addEventListener('pointerdown', (e) => { e.preventDefault(); b.setPointerCapture(e.pointerId); b.classList.add('down'); if (hold) touch.block = true; else press(k); });
-      const up = () => { b.classList.remove('down'); if (hold) touch.block = false; };
+      b.addEventListener('pointerdown', (e) => { e.preventDefault(); b.setPointerCapture(e.pointerId); b.classList.add('down'); if (hold) touch.block = true; else { press(k); if (k === 'jump') touch.jh = 1; } });
+      const up = () => { b.classList.remove('down'); if (hold) touch.block = false; if (k === 'jump') touch.jh = 0; };
       b.addEventListener('pointerup', up); b.addEventListener('pointercancel', up); b.addEventListener('lostpointercapture', up);
     });
   }
@@ -8618,14 +8734,14 @@ const FInput = (() => {
   function poll(S, i) {
     const f = S.fighters[i]; if (!f) return;
     const g = readPad();
-    let mx = (held.right ? 1 : 0) - (held.left ? 1 : 0), dn = !!held.down, block = !!held.block;
-    if (g) { mx += (g.right ? 1 : 0) - (g.left ? 1 : 0); if (g.left || g.right) { const a = navigator.getGamepads()[pad.id]; if (a && Math.abs(a.axes[0]) > .3 && !(a.buttons[14] && a.buttons[14].pressed) && !(a.buttons[15] && a.buttons[15].pressed)) mx = a.axes[0]; } dn = dn || g.down; block = block || !!g.block; }
-    if (touch.mx) mx += touch.mx; dn = dn || touch.dn; block = block || touch.block;
-    S.setIn(i, { mx: Math.max(-1, Math.min(1, mx)), dn, block });
+    let mx = (held.right ? 1 : 0) - (held.left ? 1 : 0), dn = !!held.down, block = !!held.block, jh = !!held.jump;
+    if (g) { mx += (g.right ? 1 : 0) - (g.left ? 1 : 0); if (g.left || g.right) { const a = navigator.getGamepads()[pad.id]; if (a && Math.abs(a.axes[0]) > .3 && !(a.buttons[14] && a.buttons[14].pressed) && !(a.buttons[15] && a.buttons[15].pressed)) mx = a.axes[0]; } dn = dn || g.down; block = block || !!g.block; jh = jh || !!g.jump; }
+    if (touch.mx) mx += touch.mx; dn = dn || touch.dn; block = block || touch.block; jh = jh || !!touch.jh;
+    S.setIn(i, { mx: Math.max(-1, Math.min(1, mx)), dn, block, jh });
     while (q.length) S.press(i, q.shift());
   }
   function enable(v) { on = !!v; if (!on) reset(); }
-  function reset() { held = {}; q = []; pad.prev = {}; touch.mx = 0; touch.dn = false; touch.block = false; touch.joy = -1; if (root) { root.querySelector('#fStick').classList.remove('on'); root.querySelectorAll('.fbtn.down').forEach((b) => b.classList.remove('down')); } }
+  function reset() { held = {}; q = []; pad.prev = {}; touch.mx = 0; touch.dn = false; touch.block = false; touch.jh = 0; touch.joy = -1; if (root) { root.querySelector('#fStick').classList.remove('on'); root.querySelectorAll('.fbtn.down').forEach((b) => b.classList.remove('down')); } }
   return { attach, poll, enable, reset, press, get pad() { return pad; }, get touch() { return touch; } };
 })();
 
