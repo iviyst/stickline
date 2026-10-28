@@ -7926,6 +7926,91 @@ const FSfx = (() => {
 })();
 
 'use strict';
+// FRagdoll: a small Verlet ragdoll for the Fight Arena's knocked-out fighters.
+//
+// Points carry position and previous position, so velocity is implicit; bones are distance constraints
+// solved several times a frame, and the joints that would otherwise bend the wrong way (knees, elbows,
+// neck) get angle limits, which is what stops the figure looking like a noodle.
+//
+// It is a *partial* ragdoll on purpose: the hip stays pinned to where the fight simulation says the body
+// is, so knockback, stage boundaries, landings and the end-of-round logic all keep working exactly as
+// before, and only the limbs, torso and head go limp.  Everything is in world units (the arena's metres).
+const FRagdoll = (() => {
+  const GRAV = 26, FRIC = .992, GROUNDFRIC = .72, ITER = 12;
+  // the points, in order:   0 hip · 1 knee R · 2 foot R · 3 knee L · 4 foot L · 5 chest · 6 head · 7 elbow R · 8 hand R · 9 elbow L · 10 hand L
+  const HIP = 0, KNR = 1, FTR = 2, KNL = 3, FTL = 4, CH = 5, HD = 6, ELR = 7, HNR = 8, ELL = 9, HNL = 10;
+  const STICKS = [[HIP, KNR], [KNR, FTR], [HIP, KNL], [KNL, FTL], [HIP, CH], [CH, HD], [CH, ELR], [ELR, HNR], [CH, ELL], [ELL, HNL]];
+  // joint, as [a, b, c, lowest bend, highest bend] in radians, for a fighter facing +x.  A knee may fold
+  // backwards and not forwards; an elbow the other way; the neck turns a little either side of the spine.
+  const BENDS = [
+    [HIP, KNR, FTR, -2.7, .06], [HIP, KNL, FTL, -2.7, .06],
+    [CH, ELR, HNR, -.06, 2.7], [CH, ELL, HNL, -.06, 2.7],
+    [HIP, CH, HD, -.95, .95],
+    [CH, HIP, KNR, -2.5, 2.5], [CH, HIP, KNL, -2.5, 2.5],
+    [HIP, CH, ELR, -2.9, 2.9], [HIP, CH, ELL, -2.9, 2.9]
+  ];
+  const norm = (a) => { while (a > Math.PI) a -= Math.PI * 2; while (a < -Math.PI) a += Math.PI * 2; return a; };
+  const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+
+  // pts: 11 world positions in the order above.  vel: the world velocity every point starts with.
+  function make(pts, vel, dir) {
+    const P = pts.map((p) => ({ x: p.x, y: p.y, ox: p.x - (vel.x || 0) / 60, oy: p.y - (vel.y || 0) / 60 }));
+    const sticks = STICKS.map(([a, b]) => ({ a, b, len: Math.hypot(pts[a].x - pts[b].x, pts[a].y - pts[b].y) || .1 }));
+    return { P, sticks, dir: dir >= 0 ? 1 : -1, w: 0, t: 0 };
+  }
+  // give the limbs a shove, so a knockout throws the body about instead of letting it sag
+  function kick(R, kx, ky, spread) {
+    for (let i = 1; i < R.P.length; i++) {
+      const p = R.P[i], j = (Math.random() - .5) * (spread || 2);
+      p.ox -= (kx * (.4 + Math.random() * .5) + j) / 60; p.oy -= (ky * (.3 + Math.random() * .5) + j * .6) / 60;
+    }
+  }
+  function rotateAbout(p, cx, cy, s, c) {
+    const dx = p.x - cx, dy = p.y - cy, ox = p.ox - cx, oy = p.oy - cy;
+    p.x = cx + dx * c - dy * s; p.y = cy + dx * s + dy * c;
+    p.ox = cx + ox * c - oy * s; p.oy = cy + ox * s + oy * c;   // the old position turns too, so the limb keeps its speed
+  }
+  // hold a joint inside the angle a real one could reach, by swinging the far segment round
+  function bend(P, a, b, c, lo, hi, dir) {
+    const A = P[a], B = P[b], C = P[c];
+    const base = Math.atan2(B.y - A.y, B.x - A.x), cur = Math.atan2(C.y - B.y, C.x - B.x);
+    const d = norm(cur - base), l = dir > 0 ? lo : -hi, h = dir > 0 ? hi : -lo;
+    const want = clamp(d, l, h);
+    if (want === d) return;
+    const r = want - d;
+    rotateAbout(C, B.x, B.y, Math.sin(r), Math.cos(r));
+  }
+  // hipX / hipY: where the simulation says the hip is.  ground: the surface under the fighter.
+  function step(R, dt, hipX, hipY, ground) {
+    if (dt <= 0) return;
+    R.t += dt;
+    const P = R.P;
+    for (let i = 0; i < P.length; i++) {
+      const p = P[i];
+      let vx = (p.x - p.ox) * FRIC, vy = (p.y - p.oy) * FRIC;
+      if (p.y <= ground + .02) { vx *= GROUNDFRIC; }
+      p.ox = p.x; p.oy = p.y;
+      p.x += vx; p.y += vy - GRAV * dt * dt;
+    }
+    for (let k = 0; k < ITER; k++) {
+      const hip = P[HIP];
+      hip.x = hipX; hip.y = hipY;                                  // the hip is driven by the fight simulation, not by us
+      for (const s of R.sticks) {
+        const a = P[s.a], b = P[s.b];
+        let dx = b.x - a.x, dy = b.y - a.y; const d = Math.hypot(dx, dy) || .0001;
+        const f = (s.len - d) / d * .5;
+        dx *= f; dy *= f;
+        if (s.a !== HIP) { a.x -= dx; a.y -= dy; } else { b.x += dx * 2; b.y += dy * 2; }
+        if (s.b !== HIP) { b.x += dx; b.y += dy; }
+      }
+      for (const j of BENDS) bend(P, j[0], j[1], j[2], j[3], j[4], R.dir);
+      for (let i = 1; i < P.length; i++) { const p = P[i]; if (p.y < ground + .02) { p.y = ground + .02; } }
+    }
+  }
+  return { make, kick, step, HIP, KNR, FTR, KNL, FTL, CH, HD, ELR, HNR, ELL, HNL };
+})();
+
+'use strict';
 // FRig: a 3D stick-figure (cylinders and spheres on a skeleton) and the animation that poses it from the fight sim's state.
 // Angles are in degrees, measured from "straight down" and positive towards the way the fighter faces (90 = pointing forward, 180 = straight up).
 const FRig = (() => {
@@ -7972,6 +8057,33 @@ const FRig = (() => {
     spin:     [P({ ru: 100, rf: 100, lu: -100, lf: -100, lean: 6 }), P({ ru: 110, rf: 110, lu: -110, lf: -110, lean: 6 })],
     divepunch2:null
   };
+  // A third key pose for the moves with weight behind them: the arc carries on past the target and the fighter
+  // has to pull it back, instead of the limb teleporting from the strike straight to a neutral stance.
+  // The quick pokes (jab, air moves, dives) keep two poses on purpose: they should feel snappy, not heavy.
+  const FOLLOW = {
+    cross:    P({ lu: 102, lf: 100, tw: 46, lean: 13, rt: 44, rs: 16, lt: -36 }),
+    hook:     P({ ru: 118, rf: 158, tw: 64, lean: 7, rt: 36, lt: -16 }),
+    overhead: P({ ru: 26, rf: 28, lu: 22, lf: 24, lean: 45, rt: 56, rs: 36, lt: -14 }),
+    kickF:    P({ lean: -4, rt: 76, rs: 106, lt: -8, ls: -8, ru: 30, rf: 104 }),
+    kickH:    P({ lean: -11, rt: 102, rs: 138, lt: -6, ls: -6, ru: 42, rf: 112 }),
+    round:    P({ rt: 84, rs: 130, tw: 80, lean: -14, lt: -10, ls: 6 }),
+    heel:     P({ rt: 6, rs: 0, lean: 23, lt: -28, ls: -14, ru: 36, rf: 96 }),
+    slashA:   P({ ru: 38, rf: 44, lean: 31, tw: 38, rt: 46, rs: 20 }),
+    slashB:   P({ ru: 106, rf: 140, tw: 72, lean: 7, rt: 38 }),
+    slashC:   P({ ru: 128, rf: 192, lean: 5, tw: 36, rt: 36 }),
+    cleave:   P({ ru: 16, rf: 4, lu: 14, lf: 4, lean: 49, rt: 56, rs: 34, lt: -16 }),
+    thrust:   P({ ru: 97, rf: 97, lu: 89, lf: 93, lean: 17, rt: 48, rs: 18, lt: -32 }),
+    sweep:    P({ lean: 25, ru: 84, rf: 56, rt: 48, rs: 74, lt: -56, tw: 62 }),
+    slam2:    P({ ru: 12, rf: 0, lu: 10, lf: 0, lean: 48, rt: 52, rs: 40, lt: -18 }),
+    palm:     P({ ru: 101, rf: 98, lu: 79, lf: 70, lean: 7, rt: 38 }),
+    blast:    P({ ru: 99, rf: 98, lu: 99, lf: 98, lean: 11, rt: 38, lt: -28 }),
+    charge:   P({ lean: 45, ru: 136, rf: 130, lu: -22, lf: -32, rt: 50, rs: 34, lt: -58, ls: -60 }),
+    slam:     P({ ru: 10, rf: -4, lu: 8, lf: -4, lean: 50, rt: 54, rs: 42, lt: -18 }),
+    uppercut: P({ ru: 184, rf: 192, lean: -19, rt: 14, rs: 2, lt: -20 }),
+    burst:    P({ ru: 144, rf: 152, lu: -134, lf: -142, lean: -13, rt: 28, rs: 4, lt: -28 }),
+    pounce:   P({ lean: 50, ru: 126, rf: 140, lu: 116, lf: 128, rt: -52, rs: -74, lt: -72, ls: -92 })
+  };
+  for (const k in FOLLOW) if (ANIM[k]) ANIM[k][2] = FOLLOW[k];
   const LOCKP = { fist: ['jab', 'cross'], kick: ['kickF', 'round'], blade: ['slashA', 'slashB'], staff: ['thrust', 'slashC'], claw: ['jab', 'slashB'], palm: ['palm', 'blast'], heavy: ['hook', 'overhead'] };
   const STATES = {
     jump:  P(Object.assign({ ru: 112, rf: 142, lu: 74, lf: 124, lean: 4 }, AIRL)),
@@ -8013,7 +8125,14 @@ const FRig = (() => {
         p = mix(an[0], an[1], k * (1 + .07 * Math.max(0, 1 - Math.abs(k - .8) * 5)));
         if (m.hs || m.rep) p.tw += Math.sin(t * 38) * 14;
         if (m.k === 'beam') p.lean += Math.sin(t * 30) * 2;
-      } else { const u = (t - T1) / Math.max(.001, TT - T1); p = mix(an[1], stance, ease(u) * (1 + .05 * Math.sin(Math.PI * u))); }
+      } else {
+        const u = (t - T1) / Math.max(.001, TT - T1);
+        if (an[2] && f.onGround) {
+          const FU = .34;   // the first third of the recovery is the swing carrying on, the rest is pulling it back
+          if (u < FU) p = mix(an[1], an[2], ease(u / FU));
+          else { const w = (u - FU) / (1 - FU); p = mix(an[2], stance, ease(w) * (1 + .05 * Math.sin(Math.PI * w))); }
+        } else p = mix(an[1], stance, ease(u) * (1 + .05 * Math.sin(Math.PI * u)));
+      }
       return p;
     }
     if (f.lockA) {
@@ -8151,7 +8270,13 @@ const FRig = (() => {
     if (f.alive && !f.lockA) { tgt.head -= lag * 7; tgt.lean -= lag * 4; tgt.ru -= lag * 5; tgt.lu -= lag * 5; }
     // a critically-ish damped spring per joint: limbs overshoot a touch and settle instead of snapping to the pose
     const p = R.pose, pv = R.pv || (R.pv = {});
-    const hard = !!(f.act || f.lockA), stiff = hard ? 1500 : f.state === 'hurt' || f.state === 'launch' ? 420 : 620, zeta = hard ? .86 : .68;
+    const hard = !!(f.act || f.lockA);
+    // Getting hit weakens the joints for a moment, the way an active ragdoll's drives are cut on contact:
+    // the body stops holding its pose, buckles, and firms up again as it recovers.
+    R.weak = Math.max(0, (R.weak || 0) - dt / .34);
+    const wk = R.weak;
+    let stiff = hard ? 1500 : f.state === 'hurt' || f.state === 'launch' ? 420 : 620, zeta = hard ? .86 : .68;
+    if (wk > 0) { stiff *= 1 - .82 * wk; zeta = zeta * (1 - .35 * wk) + .22 * wk; }
     const c = 2 * Math.sqrt(stiff) * zeta;
     let left = Math.min(dt, .1);
     while (left > 0) {                                     // small steps keep the spring stable at any frame rate
@@ -8176,24 +8301,59 @@ const FRig = (() => {
     let hipY = Math.max(hr, hl, .1);
     if (!f.onGround && f.state !== 'down' && f.state !== 'ko') hipY = .92;   // in the air: legs hang from fixed hips
     const z = .085;
+    // Every joint as a point relative to the hips, so the ragdoll below can take the same points over.
+    const sx = SIN(lean) * L.torso, sy = COS(lean) * L.torso;
+    const ru = dir(p.ru, L.up), rf = dir(p.rf, L.fo), lu = dir(p.lu, L.up), lf = dir(p.lf, L.fo);
+    const hl2 = lean * .6 + p.head * D;
+    const J = [
+      [0, 0],                                                   // hip
+      [rtv[0], rtv[1]], [rtv[0] + rsv[0], rtv[1] + rsv[1]],     // knee / foot, right
+      [ltv[0], ltv[1]], [ltv[0] + lsv[0], ltv[1] + lsv[1]],     // knee / foot, left
+      [sx, sy],                                                 // chest
+      [sx + SIN(hl2) * (L.neck + L.head), sy + COS(hl2) * (L.neck + L.head)],
+      [sx + ru[0], sy + ru[1]], [sx + ru[0] + rf[0], sy + ru[1] + rf[1]],   // elbow / hand, right
+      [sx + lu[0], sy + lu[1]], [sx + lu[0] + lf[0], sy + lu[1] + lf[1]]    // elbow / hand, left
+    ];
+    // ---- knocked out: hand the limbs to the ragdoll, blended in so nothing snaps ----
+    let ragW = 0;
+    if (typeof FRagdoll !== 'undefined') {
+      const out = !f.alive && f.state === 'ko';
+      let gy = 0; if (R.plats) for (const pl of R.plats) if (pl.y <= f.y + .05 && Math.abs(f.x - pl.x) <= pl.w / 2 && pl.y > gy) gy = pl.y;
+      if (out) {
+        if (f.onGround) hipY = lerp(hipY, .34, Math.min(1, dt * 3));     // the body settles once it is down
+        const sgn = f.face > 0 ? 1 : -1, toW = (j) => ({ x: f.x + j[0] * s * sgn, y: f.y + (hipY + j[1]) * s });
+        if (!R.rag) {
+          R.rag = FRagdoll.make(J.map(toW), { x: f.vx, y: f.vy }, sgn);
+          FRagdoll.kick(R.rag, f.vx * .45, Math.abs(f.vy) * .35 + 2, 3.4);
+          R.ragW = 0;
+        }
+        R.ragW = Math.min(1, (R.ragW || 0) + dt / .22);                   // ramp the physics in over ~0.2s
+        R.rag.dir = sgn;
+        FRagdoll.step(R.rag, Math.min(dt, 1 / 50), f.x, f.y + hipY * s, gy);
+        ragW = R.ragW;
+        const w = ragW, P = R.rag.P;
+        for (let i = 1; i < J.length; i++) {
+          const lx = (P[i].x - f.x) / s * sgn, ly = (P[i].y - f.y) / s - hipY;
+          J[i][0] += (lx - J[i][0]) * w; J[i][1] += (ly - J[i][1]) * w;
+        }
+      } else if (R.rag) { R.rag = null; R.ragW = 0; }
+    }
+    R.ragOn = ragW;
     // lower body (hips at the group origin)
     R.lower.position.set(0, hipY, 0);
-    aim(R.thR, 0, 0, rtv[0], rtv[1], z); aim(R.shR, rtv[0], rtv[1], rtv[0] + rsv[0], rtv[1] + rsv[1], z);
-    aim(R.thL, 0, 0, ltv[0], ltv[1], -z); aim(R.shL, ltv[0], ltv[1], ltv[0] + lsv[0], ltv[1] + lsv[1], -z);
-    R.fR.position.set(rtv[0] + rsv[0] + .04 * COS(p.rs * D), rtv[1] + rsv[1] - .02, z); R.fL.position.set(ltv[0] + lsv[0] + .04 * COS(p.ls * D), ltv[1] + lsv[1] - .02, -z);
+    aim(R.thR, 0, 0, J[1][0], J[1][1], z); aim(R.shR, J[1][0], J[1][1], J[2][0], J[2][1], z);
+    aim(R.thL, 0, 0, J[3][0], J[3][1], -z); aim(R.shL, J[3][0], J[3][1], J[4][0], J[4][1], -z);
+    R.fR.position.set(J[2][0] + .04 * COS(p.rs * D) * (1 - ragW), J[2][1] - .02, z); R.fL.position.set(J[4][0] + .04 * COS(p.ls * D) * (1 - ragW), J[4][1] - .02, -z);
     // upper body (twists about the hips)
-    R.upper.position.set(0, hipY, 0); R.upper.rotation.y = p.tw * D;
-    const sx = SIN(lean) * L.torso, sy = COS(lean) * L.torso;
-    aim(R.torso, 0, 0, sx, sy, 0);
-    const ru = dir(p.ru, L.up), rf = dir(p.rf, L.fo), lu = dir(p.lu, L.up), lf = dir(p.lf, L.fo);
-    aim(R.uaR, sx, sy, sx + ru[0], sy + ru[1], z + .02); aim(R.faR, sx + ru[0], sy + ru[1], sx + ru[0] + rf[0], sy + ru[1] + rf[1], z + .02);
-    aim(R.uaL, sx, sy, sx + lu[0], sy + lu[1], -z - .02); aim(R.faL, sx + lu[0], sy + lu[1], sx + lu[0] + lf[0], sy + lu[1] + lf[1], -z - .02);
-    R.hR.position.set(sx + ru[0] + rf[0], sy + ru[1] + rf[1], z + .02); R.hL.position.set(sx + lu[0] + lf[0], sy + lu[1] + lf[1], -z - .02);
-    const hl2 = lean * .6 + p.head * D;
-    R.head.position.set(sx + SIN(hl2) * (L.neck + L.head), sy + COS(hl2) * (L.neck + L.head), 0); R.head.rotation.z = -hl2 * .5;
+    R.upper.position.set(0, hipY, 0); R.upper.rotation.y = p.tw * D * (1 - ragW);
+    aim(R.torso, 0, 0, J[5][0], J[5][1], 0);
+    aim(R.uaR, J[5][0], J[5][1], J[7][0], J[7][1], z + .02); aim(R.faR, J[7][0], J[7][1], J[8][0], J[8][1], z + .02);
+    aim(R.uaL, J[5][0], J[5][1], J[9][0], J[9][1], -z - .02); aim(R.faL, J[9][0], J[9][1], J[10][0], J[10][1], -z - .02);
+    R.hR.position.set(J[8][0], J[8][1], z + .02); R.hL.position.set(J[10][0], J[10][1], -z - .02);
+    R.head.position.set(J[6][0], J[6][1], 0); R.head.rotation.z = -Math.atan2(J[6][0] - J[5][0], J[6][1] - J[5][1]) * .5;
     if (R.tail) R.tail.rotation.z = .3 + Math.sin(time * 9) * .25;
     if (R.wgrp) {
-      const hx = sx + ru[0] + rf[0], hy = sy + ru[1] + rf[1], ang = Math.atan2(rf[1], rf[0]);
+      const hx = J[8][0], hy = J[8][1], ang = Math.atan2(J[8][1] - J[7][1], J[8][0] - J[7][0]);
       R.wgrp.position.set(hx, hy, z + .1); R.wgrp.rotation.z = ang + (f.act && f.act.m.kind !== 'fin' ? 0 : .35) - (f.state === 'idle' || f.state === 'run' ? .25 : 0);
       if (R.wpn.sp && R.wpn.sp.spinW) R.wgrp.rotation.z += time * 8;
     }
@@ -8204,7 +8364,7 @@ const FRig = (() => {
     const wantYaw = f.face > 0 ? -.38 : Math.PI + .38; let dy = wantYaw - R.yaw; while (dy > Math.PI) dy -= Math.PI * 2; while (dy < -Math.PI) dy += Math.PI * 2;
     R.yaw += dy * (1 - Math.exp(-dt * 18)); r.rotation.y = R.yaw;
     // tumbling when launched
-    if (f.launched && !f.onGround && f.alive !== undefined) { R.spin += dt * (f.vx * f.face >= 0 ? -1 : 1) * 9 * (f.hs > 0 || !f.alive ? 1 : .3); r.rotation.z = R.spin * (f.face > 0 ? 1 : -1) * (f.alive ? .45 : 1); }
+    if (f.launched && !f.onGround && f.alive !== undefined && ragW < 1) { R.spin += dt * (f.vx * f.face >= 0 ? -1 : 1) * 9 * (f.hs > 0 || !f.alive ? 1 : .3); r.rotation.z = R.spin * (f.face > 0 ? 1 : -1) * (f.alive ? .45 : 1) * (1 - ragW); }
     else { R.spin = 0; r.rotation.z *= Math.exp(-dt * 14); if (Math.abs(r.rotation.z) < .003) r.rotation.z = 0; }
     r.rotation.order = 'YXZ';
     // blob shadow on the surface below
@@ -8508,10 +8668,14 @@ const FightView = (() => {
         star(e.x, e.y, c1, [1.8, 2.6, 3.8, 6][big], .16); ring(e.x, e.y, c0, .3, [1.6, 2.4, 3.6, 7][big], [.25, .3, .4, .7][big], .85);
         if ((e.wc && /sword|saber|great|cleaver|axe|dagger|dual|claws|scythe|pick/.test(e.wc)) || (a && /blade|claw/.test(a.style.fam) && e.kind !== 'sp')) slash(e.x, e.y, (Math.random() - .5) * 1.4 + (dirx > 0 ? .5 : Math.PI - .5), c0, [2.2, 3, 3.6, 5][big], .22, .9);
         if (hooks.onHit) hooks.onHit(e);
-        if (v) { const R = rigs[v.i]; if (R) R.jit = .12; }
+        if (v) {
+          const R = rigs[v.i];
+          // the joints go slack for a moment, so the body buckles under the hit instead of holding its pose
+          if (R) { R.jit = .12; R.weak = Math.min(1, Math.max(R.weak || 0, .32 + Math.min(.68, (e.dmg || 6) / 34) + (e.launch ? .2 : 0))); }
+        }
         break;
       }
-      case 'guardbreak': ring(e.x, e.y, '#ffffff', .5, 5, .5, 1); puff(e.x, e.y, .5, { n: 40, col: '#bfefff', spd: 10, size: .22, life: .8, grav: 8 }); star(e.x, e.y, '#ffffff', 4, .25); if (hooks.onGuardBreak) hooks.onGuardBreak(e); break;
+      case 'guardbreak': { const R = rigs[e.v]; if (R) R.weak = 1; } ring(e.x, e.y, '#ffffff', .5, 5, .5, 1); puff(e.x, e.y, .5, { n: 40, col: '#bfefff', spd: 10, size: .22, life: .8, grav: 8 }); star(e.x, e.y, '#ffffff', 4, .25); if (hooks.onGuardBreak) hooks.onGuardBreak(e); break;
       case 'ko': ring(e.x, e.y, '#ffffff', .6, 12, .8, 1); ring(e.x, e.y, F(e.v).col, .4, 8, .9, 1); puff(e.x, e.y, .5, { n: 90, col: F(e.v).col, spd: 14, size: .3, life: 1.1, grav: 4 }); star(e.x, e.y, '#ffffff', 8, .35); if (hooks.flash) hooks.flash('#ffffff', .6, .35); camS.zoom = Math.max(camS.zoom, .4); break;
       case 'jump': puff(e.x, e.y + .05, 0, { n: e.dbl ? 8 : 5, col: e.dbl ? '#cfe8ff' : '#b8b8c8', spd: 2.4, size: .22, life: .4, grav: -.5, spread: 1.2, ang: Math.PI / 2 }); if (e.dbl) ring(e.x, e.y + .1, '#9fd8ff', .3, 1.6, .3, .7); break;
       case 'land': puff(e.x, e.y + .05, 0, { n: 4 + Math.round(e.q * 8), col: '#b8b8c8', spd: 3 * (.5 + e.q), size: .24, life: .45, grav: -.4, spread: 2.4, ang: 0 }); break;
@@ -8532,7 +8696,7 @@ const FightView = (() => {
       case 'flash': { const f = F(e.f); if (hooks.flash) hooks.flash(e.col || '#ffffff', .85, .5); if (hooks.banner) hooks.banner(f, e.name); camS.zoom = 1; ring(e.x, e.y + 1, e.col || '#fff', .5, 14, .8, 1); puff(e.x, e.y + 1, .5, { n: 60, col: e.col || '#fff', spd: 12, size: .25, life: .8, grav: 0 }); break; }
       case 'nova': { const f = F(e.f); if (e.ph === 'charge') { camS.zoom = Math.max(camS.zoom, .5); } else { if (hooks.flash) hooks.flash(f.style.col2, .8, .4); ring(e.x, e.y + 1, f.style.col, 1, 22, .8, 1); ring(e.x, e.y + 1, '#ffffff', .6, 15, .6, 1); ring(e.x, .1, f.style.col, 1, 22, .7, .8, true); puff(e.x, e.y + 1, .5, { n: 120, col: f.style.col, spd: 18, size: .34, life: 1.1, grav: 0 }); star(e.x, e.y + 1, '#fff', 14, .4); } break; }
       case 'lock': { camS.zoom = 1; if (hooks.lock) hooks.lock(e); break; }
-      case 'lockhit': { const f = F(e.f); const a = Math.random() * TAU; slash(e.x, e.y, a, f.style.col2, 4 + Math.random() * 2, .2, 1); slash(e.x, e.y, a + 1.6, f.style.col, 3.2, .18, .8); puff(e.x, e.y, .6, { n: 22, col: f.style.col2, spd: 10, size: .2, life: .4, grav: 2 }); star(e.x, e.y, '#fff', 3, .1); ring(e.x, e.y, f.style.col, .2, 2.6, .2, .8); const R = rigs[e.v]; if (R) R.jit = .15; break; }
+      case 'lockhit': { const f = F(e.f); const a = Math.random() * TAU; slash(e.x, e.y, a, f.style.col2, 4 + Math.random() * 2, .2, 1); slash(e.x, e.y, a + 1.6, f.style.col, 3.2, .18, .8); puff(e.x, e.y, .6, { n: 22, col: f.style.col2, spd: 10, size: .2, life: .4, grav: 2 }); star(e.x, e.y, '#fff', 3, .1); ring(e.x, e.y, f.style.col, .2, 2.6, .2, .8); const R = rigs[e.v]; if (R) { R.jit = .15; R.weak = Math.min(1, Math.max(R.weak || 0, .45)); } break; }
       case 'lockend': camS.zoom = Math.max(camS.zoom, .6); break;
       case 'trap': if (e.ph === 'set') ring(e.x, .1, '#fff', .4, 3.4, .4, .8, true); else { ring(e.x, e.y + 1, '#fff', .4, 4, .35, 1); puff(e.x, e.y + 1, 0, { n: 24, col: '#ffffff', spd: 8, size: .22, life: .5, grav: 0, up: 4 }); } break;
       case 'rain': if (e.ph === 'start') { const f = F(e.f); ring(f.x, f.y + 1.2, f.style.col, .4, 6, .6, 1); puff(f.x, f.y + 1.6, 0, { n: 30, col: f.style.col, spd: 6, size: .22, life: .8, grav: -2, up: 4 }); } break;
@@ -8650,7 +8814,7 @@ const FightView = (() => {
     const v = new THREE.Vector3(x, y, z || 0).project(camera);
     return { x: (v.x * .5 + .5) * W, y: (-v.y * .5 + .5) * H, vis: v.z < 1 };
   }
-  return { init, resize, setup, teardown, update, render, handle, project, puff, ring, get ok() { return ready; }, get fail() { return failMsg; }, get scene() { return scene; }, get camS() { return camS; } };
+  return { init, resize, setup, teardown, update, render, handle, project, puff, ring, get ok() { return ready; }, get fail() { return failMsg; }, get scene() { return scene; }, get camS() { return camS; }, get rigs() { return rigs; } };
 })();
 
 'use strict';
