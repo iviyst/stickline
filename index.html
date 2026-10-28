@@ -2595,7 +2595,8 @@ const Input = (() => {
 
   addEventListener('keydown', (e) => {
     if (e.metaKey || e.ctrlKey || e.altKey) return;
-    setDev('keyboard');
+    const tg = e.target; if (tg && (tg.tagName === 'INPUT' || tg.tagName === 'TEXTAREA' || tg.tagName === 'SELECT')) return;   // typing a name or PIN is not playing, and must not switch the touch controls off
+    if (e.key !== 'Unidentified' && e.keyCode !== 229) setDev('keyboard');                                                   // (phone keyboards report these)
     if (!e.repeat) {
       if (JUMP.includes(e.code)) I.jumpEdge = true;
       if (DASH.includes(e.code)) { I.dashEdge = true; I.dashDir = 0; }
@@ -2627,6 +2628,7 @@ const Input = (() => {
   // Right half: touch to jump (hold = higher / glide), swipe down to slide, swipe up out of a slide to jump.
   const R = 42;                                   // full throw of a stick in px
   const stk = { L: null, R: null };
+  addEventListener('pointerdown', (e) => { if (e.pointerType === 'touch' || e.pointerType === 'pen') setDev('touch'); }, true);   // a tap anywhere (menus too) brings the touch controls back
   function bindTouch() {
     const tc = $('tc');
     const mark = (e) => { if (e.pointerType === 'touch' || e.pointerType === 'pen') setDev('touch'); };
