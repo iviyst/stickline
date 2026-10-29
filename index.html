@@ -6842,14 +6842,16 @@ const FW = 14;                        // arena half-width: the walls
 const FH = 1.9;                       // fighter height
 
 // stance families: base combo (3 lights, a heavy, air light, air heavy) with reach / speed / damage multipliers and the animations to play
+// an: the animation for light 1, light 2, light 3 (the launcher), heavy, air light, air heavy.
+// The light chains alternate limbs (lead, rear, lead) the way a real combination does.
 const FAMS = {
-  fist:  { an: ['jab', 'cross', 'hook', 'overhead', 'airjab', 'divepunch'],       rc: 1.0,  sp: 1.0,  dm: 1.0,  nm: 'Fist' },
-  kick:  { an: ['kickF', 'kickH', 'round', 'heel', 'airkick', 'divekick'],         rc: 1.18, sp: 1.0,  dm: 1.0,  nm: 'Kick' },
+  fist:  { an: ['jab', 'cross', 'uppercut', 'haymaker', 'airjab', 'divepunch'],       rc: 1.0,  sp: 1.0,  dm: 1.0,  nm: 'Fist' },
+  kick:  { an: ['kickF', 'kickH', 'spinkick', 'heel', 'airkick', 'divekick'],         rc: 1.18, sp: 1.0,  dm: 1.0,  nm: 'Kick' },
   blade: { an: ['slashA', 'slashB', 'slashC', 'cleave', 'airslash', 'diveslash'],   rc: 1.5,  sp: .95,  dm: 1.05, nm: 'Blade' },
   staff: { an: ['thrust', 'sweep', 'slashC', 'cleave', 'airslash', 'diveslash'],    rc: 1.9,  sp: .85,  dm: 1.0,  nm: 'Staff' },
-  claw:  { an: ['jab', 'cross', 'slashB', 'pounce', 'airjab', 'divepunch'],          rc: .95,  sp: 1.3,  dm: .85,  nm: 'Claw' },
-  palm:  { an: ['palm', 'palm', 'blast', 'charge', 'airpalm', 'divepunch'],          rc: 1.1,  sp: 1.0,  dm: .95,  nm: 'Palm' },
-  heavy: { an: ['hook', 'overhead', 'slam2', 'overhead', 'airjab', 'divepunch'],      rc: 1.1,  sp: .72,  dm: 1.45, nm: 'Heavy' }
+  claw:  { an: ['jab', 'cross', 'slashC', 'pounce', 'airjab', 'divepunch'],          rc: .95,  sp: 1.3,  dm: .85,  nm: 'Claw' },
+  palm:  { an: ['palm', 'palm2', 'blast', 'charge', 'airpalm', 'divepunch'],          rc: 1.1,  sp: 1.0,  dm: .95,  nm: 'Palm' },
+  heavy: { an: ['hook', 'cross', 'uppercut', 'overhead', 'airjab', 'divepunch'],      rc: 1.1,  sp: .72,  dm: 1.45, nm: 'Heavy' }
 };
 const FBASE = {
   L: [
@@ -8017,97 +8019,155 @@ const FRig = (() => {
   const D = Math.PI / 180, L = { torso: .56, neck: .08, head: .16, up: .36, fo: .36, th: .46, sh: .46 };
   const clamp = (v, a, b) => (v < a ? a : v > b ? b : v), lerp = (a, b, t) => a + (b - a) * t;
   const KEYS = ['lean', 'head', 'ru', 'rf', 'lu', 'lf', 'rt', 'rs', 'lt', 'ls', 'tw'];
-  const P = (o) => Object.assign({ lean: 8, head: 0, ru: 62, rf: 110, lu: 38, lf: 100, rt: 28, rs: 10, lt: -22, ls: -8, tw: 0 }, o);
-  const STANCE = P({});
-  const AIRL = { rt: 55, rs: -20, lt: 20, ls: -50 }, TUCK = { rt: 70, rs: -10, lt: 30, ls: -60 };
-  // [wind-up pose, strike pose] for every attack animation named in the styles
+  // R is the rear side (nearest the camera), L the lead side.  Every pose names its limbs separately, so the two
+  // arms and the two legs never have to move as one.
+
+  // ---- legs by inverse kinematics ----
+  // Given how high the hips are and where a foot is planted, find the thigh and shin angles (the knee always bends
+  // forward).  Poses built this way keep both feet on the floor instead of sliding about as the body moves.
+  function ik(fx, H) {
+    const d = Math.min(Math.hypot(fx, H), L.th * 2 - 1e-4), base = Math.atan2(fx, H) / D, a = Math.acos(d / (L.th * 2)) / D;
+    return [base + a, base - a];
+  }
+  const FR = -.36, FL = .30, HS = .84;                 // fighting stance: rear foot back, lead foot forward, knees bent
+  function legs(H, fr, fl) { const r = ik(fr == null ? FR : fr, H), l = ik(fl == null ? FL : fl, H); return { rt: r[0], rs: r[1], lt: l[0], ls: l[1] }; }
+  // the guard: lead fist out in front of the face, rear fist tucked at the chin, chin down, chest turned a little side-on
+  const GUARD = { lean: 8, head: -6, ru: 28, rf: 172, lu: 52, lf: 158, tw: -8 };
+  const STANCE = Object.assign({}, GUARD, legs(HS));
+  // G: a grounded pose built on the guard (anything not named keeps its guard value); H / fr / fl plant the feet
+  const G = (o, H, fr, fl) => Object.assign({}, STANCE, H != null ? legs(H, fr, fl) : null, o);
+  // K: a kick.  The kicking leg is posed by hand; the standing leg keeps its foot exactly where it was
+  const K = (o, side, H) => {
+    const p = Object.assign({}, STANCE, o), h = H || .86;
+    if (side === 'L') { const r = ik(FR, h); p.rt = r[0]; p.rs = r[1]; } else { const l = ik(FL, h); p.lt = l[0]; p.ls = l[1]; }
+    return p;
+  };
+  // A: in the air the lead knee comes up and the rear leg trails
+  const AIRB = Object.assign({}, GUARD, { lean: 4, rt: -14, rs: -56, lt: 84, ls: 6 });
+  const A = (o) => Object.assign({}, AIRB, o);
+
+  // [wind-up, strike, follow-through] for every attack.  The follow-through is optional: quick pokes stay snappy.
   const ANIM = {
-    jab:      [P({ ru: 40, rf: 125, lean: 4, tw: -14 }), P({ ru: 92, rf: 94, lean: 18, tw: 18, rt: 40 })],
-    cross:    [P({ lu: 20, lf: 130, tw: -22, lean: 2 }), P({ lu: 92, lf: 93, lean: 22, tw: 30, rt: 46, rs: 14, lt: -34 })],
-    hook:     [P({ ru: -10, rf: 60, tw: -34, lean: 0 }), P({ ru: 100, rf: 128, tw: 44, lean: 15, rt: 40 })],
-    overhead: [P({ ru: 172, rf: 190, lu: 160, lf: 185, lean: -10 }), P({ ru: 58, rf: 68, lu: 52, lf: 64, lean: 36, rt: 50, rs: 25, lt: -20 })],
-    airjab:   [P(Object.assign({ ru: 40, rf: 125 }, TUCK)), P(Object.assign({ ru: 92, rf: 94, lean: 18, tw: 18 }, TUCK))],
-    divepunch:[P({ lean: 20, ru: 100, rf: 150, lu: 90, lf: 140, rt: -30, rs: -60, lt: -40, ls: -70 }), P({ lean: 46, ru: 40, rf: 36, lu: 70, lf: 100, rt: -40, rs: -60, lt: -60, ls: -80 })],
-    kickF:    [P({ rt: 70, rs: -20, lean: -4 }), P({ lean: -14, rt: 96, rs: 92, lt: -8, ls: -8, ru: 24, rf: 100 })],
-    kickH:    [P({ rt: 90, rs: -10, lean: -8 }), P({ lean: -26, rt: 128, rs: 124, lt: -6, ls: -6, ru: 30, rf: 100 })],
-    round:    [P({ rt: 80, rs: 0, tw: -32, lean: -5 }), P({ rt: 100, rs: 112, tw: 52, lean: -26, lt: -4, ls: -4 })],
-    heel:     [P({ rt: 170, rs: 150, lean: -22 }), P({ rt: 24, rs: 16, lean: 10, lt: -20, ls: -10 })],
-    airkick:  [P(Object.assign({}, AIRL, { rt: 70, rs: 20, lean: -4 })), P({ lean: -10, rt: 88, rs: 84, lt: 40, ls: -30, ru: 30, rf: 100 })],
-    divekick: [P({ lean: -20, rt: 90, rs: 30, lt: 40, ls: -30 }), P({ lean: -34, rt: 48, rs: 44, lt: 28, ls: 24, ru: 130, rf: 150 })],
-    slashA:   [P({ ru: 150, rf: 172, lean: -10 }), P({ ru: 72, rf: 82, lean: 20, tw: 22, rt: 42 })],
-    slashB:   [P({ ru: 100, rf: -8, tw: -42, lean: 2 }), P({ ru: 92, rf: 104, tw: 48, lean: 14, rt: 40 })],
-    slashC:   [P({ ru: 20, rf: -28, lean: 8 }), P({ ru: 108, rf: 168, lean: 14, tw: 22, rt: 40 })],
-    cleave:   [P({ ru: 170, rf: 185, lu: 160, lf: 180, lean: -12 }), P({ ru: 52, rf: 40, lu: 48, lf: 40, lean: 38, rt: 52, rs: 30, lt: -22 })],
-    airslash: [P(Object.assign({ ru: 150, rf: 172 }, TUCK)), P(Object.assign({ ru: 72, rf: 82, lean: 16 }, TUCK))],
-    diveslash:[P({ lean: 20, ru: 160, rf: 175, rt: -30, rs: -60, lt: -40, ls: -70 }), P({ lean: 46, ru: 48, rf: 40, lu: 70, lf: 70, rt: -40, rs: -60, lt: -50, ls: -80 })],
-    thrust:   [P({ ru: 66, rf: 130, lu: 56, lf: 112, lean: 4 }), P({ ru: 90, rf: 90, lu: 84, lf: 88, lean: 26, rt: 56, rs: 20, lt: -30 })],
-    sweep:    [P({ lean: 12, ru: 20, rf: -20, rt: 44, rs: 40, lt: -30, tw: -26 }), P({ lean: 34, ru: 70, rf: 40, rt: 62, rs: 62, lt: -50, tw: 40 })],
-    slam2:    [P({ ru: 172, rf: 180, lu: 168, lf: 176, lean: -8 }), P({ ru: 40, rf: 28, lu: 36, lf: 28, lean: 40, rt: 50, rs: 38, lt: -20 })],
-    pounce:   [P({ lean: 24, ru: 20, rf: 90, lu: 20, lf: 90, rt: 70, rs: 70, lt: -10, ls: 50 }), P({ lean: 46, ru: 112, rf: 122, lu: 102, lf: 112, rt: -50, rs: -72, lt: -70, ls: -90 })],
-    palm:     [P({ ru: 52, rf: 128, lu: 40, lf: 120 }), P({ ru: 92, rf: 92, lu: 72, lf: 66, lean: 16, rt: 40 })],
-    blast:    [P({ ru: 40, rf: 132, lu: 40, lf: 132, lean: -5 }), P({ ru: 90, rf: 90, lu: 90, lf: 90, lean: 22, rt: 40, lt: -30 })],
-    charge:   [P({ lean: 30, ru: -50, rf: -62, lu: -42, lf: -56, rt: 58, rs: 36, lt: -26 }), P({ lean: 56, ru: 118, rf: 108, lu: -30, lf: -40, rt: 54, rs: 44, lt: -60, ls: -64 })],
-    airpalm:  [P(Object.assign({ ru: 52, rf: 128 }, TUCK)), P(Object.assign({ ru: 92, rf: 92, lu: 72, lf: 66, lean: 16 }, TUCK))],
-    cast:     [P({ ru: 40, rf: 132, lu: 30, lf: 120, lean: -6 }), P({ ru: 98, rf: 96, lu: 82, lf: 84, lean: 14, rt: 36 })],
-    raise:    [P({ ru: 30, rf: 24, lu: 26, lf: 20, lean: -4, rt: 40, rs: 22, lt: -30, ls: 6 }), P({ ru: 176, rf: 180, lu: 172, lf: 178, lean: -12, rt: 20, rs: 6, lt: -20, ls: -6 })],
-    burst:    [P({ ru: 20, rf: 100, lu: 20, lf: 100, rt: 44, rs: 8, lt: -44, ls: 12, lean: 20 }), P({ ru: 128, rf: 134, lu: -118, lf: -124, lean: -6, rt: 30, rs: 6, lt: -30, ls: -4 })],
-    buff:     [P({ lean: 22, ru: 50, rf: 160, lu: 50, lf: 160, rt: 44, rs: 36, lt: -34 }), P({ lean: 4, ru: 120, rf: 180, lu: -100, lf: -170, rt: 28, rs: 6, lt: -28 })],
-    slam:     [P({ ru: 174, rf: 178, lu: 174, lf: 178, lean: -10, rt: 15, lt: -15 }), P({ ru: 40, rf: 30, lu: 36, lf: 30, lean: 42, rt: 52, rs: 44, lt: -22 })],
-    uppercut: [P({ ru: 18, rf: 84, lean: 0, rt: 44, rs: 44, lt: -30, ls: 20 }), P({ ru: 164, rf: 176, lean: -8, rt: 20, rs: 8, lt: -24 })],
-    spin:     [P({ ru: 100, rf: 100, lu: -100, lf: -100, lean: 6 }), P({ ru: 110, rf: 110, lu: -110, lf: -110, lean: 6 })],
-    divepunch2:null
+    // ---- punches: one arm at a time; the other hand stays home ----
+    jab:      [G({ lu: 44, lf: 168, tw: -14, lean: 6 }),
+               G({ lu: 86, lf: 88, ru: 24, rf: 176, tw: 14, lean: 14, head: -10 }, .83, -.38, .34)],
+    cross:    [G({ ru: 20, rf: 178, tw: -26, lean: 4 }, .82),
+               G({ ru: 88, rf: 90, lu: 34, lf: 170, tw: 40, lean: 20, head: -12, rt: -6, rs: -42 }, .82, -.3, .34),   // rear heel comes up as the hips turn
+               G({ ru: 96, rf: 100, lu: 30, lf: 172, tw: 50, lean: 16, rt: -8, rs: -40 }, .82)],
+    uppercut: [G({ lu: 8, lf: 96, tw: -18, lean: 14, head: -2 }, .72),                      // dip the knees, drop the fist...
+               G({ lu: 128, lf: 170, tw: 24, lean: -6, head: -16 }, .9, -.3, .3),            // ...drive up through the legs, fist finishing in front of the face
+               G({ lu: 140, lf: 178, tw: 28, lean: -12, head: -18 }, .91, -.3, .3)],
+    hook:     [G({ lu: 70, lf: 132, tw: -30, lean: 4 }),
+               G({ lu: 98, lf: 150, tw: 48, lean: 12, head: -8 }, .82),
+               G({ lu: 102, lf: 168, tw: 66, lean: 8 }, .82)],
+    haymaker: [G({ ru: -34, rf: 54, lu: 80, lf: 112, tw: -42, lean: -6 }, .8),               // rear fist cocked way back, lead hand measuring the distance
+               G({ ru: 104, rf: 70, lu: 14, lf: 150, tw: 52, lean: 30, head: -14 }, .76, -.3, .52),
+               G({ ru: 66, rf: 36, lu: 8, lf: 140, tw: 62, lean: 36 }, .74, -.3, .54)],
+    overhead: [G({ ru: 176, rf: 196, lu: 168, lf: 200, tw: -10, lean: -12, head: 4 }, .86),   // the brute's hammer: both fists locked together as one
+               G({ ru: 70, rf: 44, lu: 64, lf: 48, tw: 14, lean: 36, head: -12 }, .72, -.34, .46),
+               G({ ru: 30, rf: 8, lu: 26, lf: 10, tw: 18, lean: 46 }, .7, -.34, .48)],
+    airjab:   [A({ lu: 42, lf: 168, tw: -12 }), A({ lu: 88, lf: 90, tw: 14, lean: 10 })],
+    divepunch:[A({ ru: 172, rf: 196, lean: -8, rt: -30, rs: -70, lt: 60, ls: -20 }),
+               A({ ru: 62, rf: 34, lu: 20, lf: 150, lean: 34, head: -14, rt: -40, rs: -80, lt: 40, ls: -30 })],
+    // ---- kicks: chamber the knee, snap the leg out, re-chamber it before it comes down ----
+    kickF:    [K({ lt: 102, ls: 14, lean: -6, lu: 40, lf: 150, ru: 30, rf: 160 }, 'L', .86),
+               K({ lt: 92, ls: 90, lean: -16, head: -4, lu: 28, lf: 140, ru: 36, rf: 168 }, 'L', .87),
+               K({ lt: 100, ls: 24, lean: -8 }, 'L', .86)],
+    kickH:    [K({ rt: 96, rs: 4, tw: -30, lean: -10, ru: -10, rf: 60 }, 'R', .86),
+               K({ rt: 120, rs: 122, tw: 40, lean: -30, head: -6, ru: -46, rf: -20, lu: 48, lf: 166 }, 'R', .88),   // rear arm swings back to balance
+               K({ rt: 106, rs: 58, tw: 54, lean: -18, ru: -30, rf: 20 }, 'R', .87)],
+    round:    [K({ rt: 90, rs: 10, tw: -36, lean: -8 }, 'R', .85),
+               K({ rt: 98, rs: 100, tw: 46, lean: -24, ru: -40, rf: -10 }, 'R', .87),
+               K({ rt: 96, rs: 40, tw: 60, lean: -14 }, 'R', .86)],
+    spinkick: [K({ rt: 20, rs: -60, lean: 14, tw: -10, ru: 10, rf: 150, lu: 30, lf: 150 }, 'R', .8),
+               K({ rt: 104, rs: 108, lean: -34, head: -8, ru: -50, rf: -20, lu: 60, lf: 170 }, 'R', .88),
+               K({ rt: 90, rs: 40, lean: -18 }, 'R', .86)],
+    heel:     [K({ rt: 168, rs: 162, lean: -24, head: 6, ru: -30, rf: 10, lu: 110, lf: 150 }, 'R', .88),   // axe kick: leg straight up...
+               K({ rt: 44, rs: 36, lean: 20, head: -10, ru: 10, rf: 120, lu: 60, lf: 160 }, 'R', .84),   // ...chopped straight down
+               K({ rt: 70, rs: 20, lean: 12 }, 'R', .84)],
+    airkick:  [A({ lt: 96, ls: 20, rt: -20, rs: -70, lean: -6 }), A({ lt: 90, ls: 88, rt: -26, rs: -84, lean: -18, ru: -20, rf: 30 })],
+    divekick: [A({ lt: 110, ls: 30, rt: -10, rs: -60, lean: -14 }), A({ lt: 52, ls: 46, rt: 100, rs: -6, lean: -34, head: -8, ru: 130, rf: 150, lu: -40, lf: -10 })],
+    // ---- blades and claws: the rear hand carries the weapon ----
+    slashA:   [G({ ru: 162, rf: 204, lu: 70, lf: 124, tw: -22, lean: -6 }),
+               G({ ru: 84, rf: 62, lu: 40, lf: 150, tw: 26, lean: 18, head: -8 }, .82),
+               G({ ru: 40, rf: 12, lu: -10, lf: 40, tw: 34, lean: 28 }, .8)],
+    slashB:   [G({ ru: -36, rf: -84, lu: 80, lf: 120, tw: -50, lean: 2 }),
+               G({ ru: 94, rf: 98, lu: 30, lf: 160, tw: 46, lean: 12 }, .82),
+               G({ ru: 112, rf: 148, lu: 10, lf: 120, tw: 68, lean: 6 }, .82)],
+    slashC:   [G({ ru: 12, rf: -28, lu: 60, lf: 140, lean: 16, tw: -14 }, .74),
+               G({ ru: 150, rf: 176, lu: 30, lf: 100, lean: -8, head: -14, tw: 16 }, .9),
+               G({ ru: 176, rf: 198, lu: 20, lf: 80, lean: -14, tw: 20 }, .91)],
+    cleave:   [G({ ru: 176, rf: 212, lu: 122, lf: 160, tw: -20, lean: -14, head: 6 }, .86),
+               G({ ru: 72, rf: 42, lu: -30, lf: 14, tw: 24, lean: 34, head: -12 }, .76, -.3, .5),
+               G({ ru: 30, rf: -4, lu: -40, lf: 0, tw: 30, lean: 42 }, .74, -.3, .52)],
+    airslash: [A({ ru: 160, rf: 200, lu: 60, lf: 130 }), A({ ru: 76, rf: 56, lu: 20, lf: 150, lean: 14, tw: 20 })],
+    diveslash:[A({ ru: 170, rf: 210, lean: -10, rt: -30, rs: -70, lt: 70, ls: -10 }),
+               A({ ru: 50, rf: 20, lu: 120, lf: 160, lean: 40, head: -14, rt: -40, rs: -80, lt: 40, ls: -30 })],
+    // ---- staff: two hands on the shaft, held apart ----
+    thrust:   [G({ ru: 50, rf: 112, lu: 40, lf: 138, tw: -22, lean: 2 }, .82),
+               G({ ru: 90, rf: 92, lu: 70, lf: 104, tw: 16, lean: 22, head: -8 }, .8, -.3, .46),
+               G({ ru: 96, rf: 96, lu: 78, lf: 100, tw: 20, lean: 18 }, .8, -.3, .48)],
+    sweep:    [G({ ru: 20, rf: -24, lu: 60, lf: 130, tw: -34, lean: 18 }, .72),
+               G({ ru: 76, rf: 24, lu: 10, lf: 90, tw: 40, lean: 34, head: -10 }, .66, -.42, .4),
+               G({ ru: 90, rf: 50, lu: 0, lf: 80, tw: 60, lean: 26 }, .68, -.42, .4)],
+    pounce:   [G({ lean: 26, ru: 10, rf: 100, lu: 20, lf: 110, head: 8 }, .66),
+               A({ lean: 44, ru: 116, rf: 128, lu: 96, lf: 110, rt: -56, rs: -80, lt: -40, ls: -70, head: -6 }),
+               A({ lean: 46, ru: 124, rf: 140, lu: 108, lf: 122, rt: -50, rs: -76, lt: -34, ls: -64 })],
+    // ---- palms ----
+    palm:     [G({ lu: 38, lf: 152, tw: -16, lean: 4 }),
+               G({ lu: 90, lf: 104, ru: 14, rf: 106, tw: 16, lean: 14, head: -8 }, .82)],
+    palm2:    [G({ ru: 20, rf: 162, tw: -26, lean: 2 }),
+               G({ ru: 90, rf: 106, lu: 8, lf: 98, tw: 38, lean: 18, head: -10 }, .82, -.36, .36),
+               G({ ru: 96, rf: 112, lu: 6, lf: 96, tw: 44, lean: 14 }, .82, -.36, .36)],
+    blast:    [G({ ru: 16, rf: 112, lu: 26, lf: 124, tw: -34, lean: -4 }, .76),                     // both palms chambered at the hip...
+               G({ ru: 94, rf: 116, lu: 78, lf: 118, tw: 20, lean: 18, head: -10 }, .8, -.36, .42),   // ...driven out stacked, one above the other
+               G({ ru: 100, rf: 122, lu: 84, lf: 124, tw: 26, lean: 14 }, .8, -.36, .44)],
+    airpalm:  [A({ lu: 40, lf: 150 }), A({ lu: 90, lf: 104, ru: 14, rf: 106, lean: 12, tw: 16 })],
+    // ---- specials ----
+    cast:     [G({ lu: 30, lf: 132, ru: 8, rf: 104, tw: -24, lean: -4 }, .82),
+               G({ lu: 92, lf: 98, ru: 18, rf: 112, tw: 18, lean: 12, head: -8 }, .82, -.38, .36),
+               G({ lu: 96, lf: 104, ru: 16, rf: 110, tw: 22, lean: 10 }, .82, -.38, .36)],
+    raise:    [G({ ru: 16, rf: 30, lu: 10, lf: 46, lean: 12, head: -6 }, .74),
+               G({ ru: 178, rf: 182, lu: 64, lf: 24, lean: -12, head: 14 }, .9),
+               G({ ru: 182, rf: 186, lu: 70, lf: 30, lean: -14, head: 16 }, .9)],
+    burst:    [G({ ru: 24, rf: 104, lu: 18, lf: 96, lean: 22, head: -6, tw: -8 }, .7),
+               G({ ru: 130, rf: 138, lu: -120, lf: -128, lean: -8, head: 10 }, .9, -.42, .38),
+               G({ ru: 144, rf: 152, lu: -134, lf: -142, lean: -13 }, .9, -.42, .38)],
+    buff:     [G({ lean: 26, head: -10, ru: 46, rf: 156, lu: 40, lf: 150 }, .7),
+               G({ lean: -4, head: 12, ru: 124, rf: 182, lu: -96, lf: -168 }, .86, -.42, .38)],
+    charge:   [G({ lean: 30, ru: -54, rf: -66, lu: 60, lf: 140, head: -4 }, .72),
+               G({ lean: 52, ru: 118, rf: 108, lu: -36, lf: -46, head: -12, tw: 14 }, .7, -.56, .46),
+               G({ lean: 44, ru: 134, rf: 128, lu: -26, lf: -34, tw: 20 }, .7, -.56, .48)],
+    slam:     [G({ ru: 176, rf: 182, lu: 160, lf: 192, lean: -12, head: 6 }, .9),
+               G({ ru: 40, rf: 26, lu: 30, lf: 16, lean: 44, head: -14 }, .66, -.42, .42),
+               G({ ru: 10, rf: -6, lu: 4, lf: -8, lean: 50 }, .64, -.42, .42)],
+    spin:     [G({ ru: 96, rf: 100, lu: -96, lf: -100, lean: 6 }, .84), G({ ru: 104, rf: 108, lu: -104, lf: -108, lean: 4 }, .86)]
   };
-  // A third key pose for the moves with weight behind them: the arc carries on past the target and the fighter
-  // has to pull it back, instead of the limb teleporting from the strike straight to a neutral stance.
-  // The quick pokes (jab, air moves, dives) keep two poses on purpose: they should feel snappy, not heavy.
-  const FOLLOW = {
-    cross:    P({ lu: 102, lf: 100, tw: 46, lean: 13, rt: 44, rs: 16, lt: -36 }),
-    hook:     P({ ru: 118, rf: 158, tw: 64, lean: 7, rt: 36, lt: -16 }),
-    overhead: P({ ru: 26, rf: 28, lu: 22, lf: 24, lean: 45, rt: 56, rs: 36, lt: -14 }),
-    kickF:    P({ lean: -4, rt: 76, rs: 106, lt: -8, ls: -8, ru: 30, rf: 104 }),
-    kickH:    P({ lean: -11, rt: 102, rs: 138, lt: -6, ls: -6, ru: 42, rf: 112 }),
-    round:    P({ rt: 84, rs: 130, tw: 80, lean: -14, lt: -10, ls: 6 }),
-    heel:     P({ rt: 6, rs: 0, lean: 23, lt: -28, ls: -14, ru: 36, rf: 96 }),
-    slashA:   P({ ru: 38, rf: 44, lean: 31, tw: 38, rt: 46, rs: 20 }),
-    slashB:   P({ ru: 106, rf: 140, tw: 72, lean: 7, rt: 38 }),
-    slashC:   P({ ru: 128, rf: 192, lean: 5, tw: 36, rt: 36 }),
-    cleave:   P({ ru: 16, rf: 4, lu: 14, lf: 4, lean: 49, rt: 56, rs: 34, lt: -16 }),
-    thrust:   P({ ru: 97, rf: 97, lu: 89, lf: 93, lean: 17, rt: 48, rs: 18, lt: -32 }),
-    sweep:    P({ lean: 25, ru: 84, rf: 56, rt: 48, rs: 74, lt: -56, tw: 62 }),
-    slam2:    P({ ru: 12, rf: 0, lu: 10, lf: 0, lean: 48, rt: 52, rs: 40, lt: -18 }),
-    palm:     P({ ru: 101, rf: 98, lu: 79, lf: 70, lean: 7, rt: 38 }),
-    blast:    P({ ru: 99, rf: 98, lu: 99, lf: 98, lean: 11, rt: 38, lt: -28 }),
-    charge:   P({ lean: 45, ru: 136, rf: 130, lu: -22, lf: -32, rt: 50, rs: 34, lt: -58, ls: -60 }),
-    slam:     P({ ru: 10, rf: -4, lu: 8, lf: -4, lean: 50, rt: 54, rs: 42, lt: -18 }),
-    uppercut: P({ ru: 184, rf: 192, lean: -19, rt: 14, rs: 2, lt: -20 }),
-    burst:    P({ ru: 144, rf: 152, lu: -134, lf: -142, lean: -13, rt: 28, rs: 4, lt: -28 }),
-    pounce:   P({ lean: 50, ru: 126, rf: 140, lu: 116, lf: 128, rt: -52, rs: -74, lt: -72, ls: -92 })
-  };
-  for (const k in FOLLOW) if (ANIM[k]) ANIM[k][2] = FOLLOW[k];
-  const LOCKP = { fist: ['jab', 'cross'], kick: ['kickF', 'round'], blade: ['slashA', 'slashB'], staff: ['thrust', 'slashC'], claw: ['jab', 'slashB'], palm: ['palm', 'blast'], heavy: ['hook', 'overhead'] };
+  ANIM.slam2 = ANIM.overhead;
+  ANIM.spinkick.spin = 1;   // turns the whole body round once
+  ANIM.spin.spin = 3;       // the whirlwind: three full turns
+  const LOCKP = { fist: ['jab', 'cross'], kick: ['kickF', 'round'], blade: ['slashA', 'slashB'], staff: ['thrust', 'slashC'], claw: ['jab', 'cross'], palm: ['palm', 'palm2'], heavy: ['hook', 'cross'] };
   const STATES = {
-    jump:  P(Object.assign({ ru: 112, rf: 142, lu: 74, lf: 124, lean: 4 }, AIRL)),
-    fall:  P({ ru: 130, rf: 160, lu: 100, lf: 140, rt: 20, rs: 6, lt: -12, ls: -18, lean: 2 }),
-    block: P({ lean: 6, ru: 122, rf: 164, lu: 112, lf: 156, rt: 42, rs: 34, lt: -26, ls: -6 }),
-    hurt:  P({ lean: -22, head: -22, ru: -30, rf: 22, lu: 10, lf: 44, rt: 16, rs: 4, lt: -10, ls: -6 }),
-    launch:P({ lean: -48, head: -30, ru: -70, rf: -40, lu: -50, lf: -20, rt: 40, rs: 70, lt: 10, ls: 40 }),
-    down:  P({ lean: -90, head: 0, ru: -30, rf: -20, lu: -50, lf: -40, rt: 92, rs: 90, lt: 86, ls: 88 }),
-    dash:  P({ lean: 46, ru: -60, rf: -74, lu: -48, lf: -62, rt: -50, rs: -72, lt: 58, ls: 40 }),
-    dizzy: P({ lean: 10, head: 10, ru: 10, rf: 20, lu: 6, lf: 18, rt: 16, rs: 4, lt: -12, ls: -4 }),
-    locked:P({ lean: -26, head: -28, ru: -40, rf: -10, lu: -30, lf: 10, rt: 14, rs: 6, lt: -8, ls: 4 }),
-    win:   P({ lean: -4, ru: 176, rf: 178, lu: 40, lf: 100, rt: 22, rs: 8, lt: -20 }),
-    recover: P({ lean: 10, ru: 50, rf: 100, lu: 32, lf: 90, rt: 26, rs: 12, lt: -20 }),
-    // the crouch that loads a jump: knees bent, arms swung back ready to throw up
-    jumpsquat: P({ lean: 16, head: -6, ru: -34, rf: -4, lu: -40, lf: -12, rt: 52, rs: 46, lt: -46, ls: 44 }),
-    // the moment you leave the ground: everything thrown upward
-    takeoff: P({ lean: -4, head: 4, ru: 150, rf: 172, lu: 140, lf: 168, rt: 10, rs: -24, lt: -16, ls: -42 }),
-    // absorbing a landing: knees give, arms come out for balance
-    land:  P({ lean: 18, head: -8, ru: 10, rf: 70, lu: -8, lf: 56, rt: 56, rs: 52, lt: -50, ls: 48 }),
-    // digging the heels in to turn around at speed
-    skid:  P({ lean: -16, head: 8, ru: -46, rf: -16, lu: 86, lf: 128, rt: 64, rs: 30, lt: -40, ls: 10 })
+    jump:      A({ lean: 6, ru: -24, rf: 30, lu: 128, lf: 156 }),                                   // rising: lead knee and lead arm drive up
+    fall:      Object.assign({}, GUARD, { lean: 4, head: -4, ru: -34, rf: 14, lu: 108, lf: 150, rt: -10, rs: -30, lt: 40, ls: 2 }),   // lead arm up and out, rear arm swept back for balance, lead knee ready to land
+    tuck:      { lean: 36, head: -22, ru: 70, rf: 20, lu: 80, lf: 30, rt: 122, rs: 6, lt: 128, ls: 16, tw: 0 },   // knees to the chest for the somersault
+    takeoff:   Object.assign({}, GUARD, { lean: -2, head: 6, ru: 150, rf: 168, lu: 136, lf: 160, rt: -6, rs: -10, lt: 6, ls: -4 }),
+    jumpsquat: G({ lean: 20, head: -6, ru: -38, rf: -6, lu: -26, lf: 8 }, .64, -.34, .3),
+    land:      G({ lean: 18, head: -8, ru: -14, rf: 64, lu: 62, lf: 142 }, .64),
+    block:     G({ lean: 2, head: -16, ru: 46, rf: 174, lu: 72, lf: 172, tw: -14 }, .76),          // forearms up in front of the face, chin buried
+    hurt:      G({ lean: -22, head: -26, ru: -24, rf: 34, lu: 36, lf: 86, tw: 14 }, .8),
+    launch:    { lean: -50, head: -30, ru: -84, rf: -44, lu: 128, lf: 156, rt: 52, rs: 86, lt: -12, ls: 24, tw: 0 },
+    down:      { lean: -90, head: 0, ru: -34, rf: -24, lu: -56, lf: -40, rt: 92, rs: 90, lt: 86, ls: 88, tw: 0 },
+    dash:      G({ lean: 44, head: -10, ru: -72, rf: -92, lu: 64, lf: 132 }, .7, -.62, .42),           // guard hand leads, rear arm streams behind
+    dizzy:     G({ lean: 10, head: 10, ru: 8, rf: 20, lu: 14, lf: 30, tw: 0 }, .82),
+    locked:    G({ lean: -26, head: -28, ru: -40, rf: -10, lu: -30, lf: 10 }, .86),
+    win:       G({ lean: -4, head: 8, ru: 176, rf: 178, lu: 44, lf: 168, tw: 10 }, .88),
+    recover:   G({ lean: 12, ru: 36, rf: 150, lu: 60, lf: 140 }, .8),
+    skid:      G({ lean: -18, head: 8, ru: -46, rf: -4, lu: 100, lf: 120, tw: 0 }, .7, -.5, .5)
   };
   const mix = (a, b, t) => { const o = {}; for (const k of KEYS) o[k] = a[k] + (b[k] - a[k]) * t; return o; };
   const ease = (t) => (t = clamp(t, 0, 1), t * t * (3 - 2 * t)), snap = (t) => (t = clamp(t, 0, 1), 1 - (1 - t) * (1 - t));
+  const easeIO = (t) => (t = clamp(t, 0, 1), t < .5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
 
   // the pose a fighter should have right now (target; the rig smooths towards it)
   function poseFor(f, time, rig) {
@@ -8115,15 +8175,14 @@ const FRig = (() => {
     if (f.act) {
       const a = f.act, m = a.m, an = ANIM[m.a] || ANIM.jab, T0 = m.t[0], T1 = T0 + m.t[1], TT = T1 + m.t[2];
       const t = a.t;
-      if (m.a === 'spin') { const p = mix(an[0], an[1], .5); p.tw = t * 1500; return p; }
       let p;
-      const stance = f.onGround ? STANCE : STATES.jump;
+      const stance = f.onGround ? STANCE : STATES.fall;
       // wind up past the pose (a coil), snap through the strike and overshoot a little, then unwind back to stance
       if (t < T0) { const u = t / Math.max(.001, T0); p = mix(stance, an[0], ease(u) * (1 + .09 * Math.sin(Math.PI * Math.min(1, u * 1.15)))); }
       else if (t < T1) {
         const u = (t - T0) / Math.max(.001, m.t[1]), k = snap(Math.min(1, u * (m.hs || m.rep || m.k === 'beam' ? 6 : 3.2)));
         p = mix(an[0], an[1], k * (1 + .07 * Math.max(0, 1 - Math.abs(k - .8) * 5)));
-        if (m.hs || m.rep) p.tw += Math.sin(t * 38) * 14;
+        if ((m.hs || m.rep) && !an.spin) p.tw += Math.sin(t * 38) * 14;
         if (m.k === 'beam') p.lean += Math.sin(t * 30) * 2;
       } else {
         const u = (t - T1) / Math.max(.001, TT - T1);
@@ -8139,29 +8198,42 @@ const FRig = (() => {
       const L = f.lockA, an = LOCKP[f.style.fam] || LOCKP.fist, ts = (L.t * L.n / Math.max(.3, L.dur)) % 1, k = an[L.i % 2], pose = ANIM[k];
       const p = mix(pose[0], pose[1], snap(ts * 2.4)); p.lean += 6; return p;
     }
-    if (st === 'jumpsquat') { const u = ease(1 - (f.jsq || 0) / .055); return mix(f.onGround ? STANCE : STANCE, STATES.jumpsquat, .35 + u * .65); }
+    if (st === 'jumpsquat') { const u = ease(1 - (f.jsq || 0) / .055); return mix(STANCE, STATES.jumpsquat, .35 + u * .65); }
     if (st === 'skid') {
       const sp = Math.min(1, Math.abs(f.vx) / 6.4), p = mix(STANCE, STATES.skid, .45 + sp * .55);
       p.tw += (f.turn || 1) * f.face * -18 * sp; return p;
     }
     if (st === 'run') {
       const sp = Math.min(1, Math.abs(f.vx) / 6.4), back = (f.vx * f.face) < -.3, ph = rig.run, s = Math.sin(ph), c = Math.cos(ph);
-      const o = P({ lean: back ? 2 : 12 + 8 * sp, rt: 50 * s * sp + 6, lt: -50 * s * sp + 6, ru: 62 - 40 * s * sp, lu: 38 + 40 * s * sp });
-      o.rs = o.rt - 8 - 62 * Math.max(0, -c) * sp; o.ls = o.lt - 8 - 62 * Math.max(0, c) * sp; o.rf = o.ru + 52; o.lf = o.lu + 60;
-      o.tw = -s * 11 * sp; o.head = -c * 5 * sp;                       // the shoulders counter-rotate against the hips, the head rides along
-      return o;
+      if (back) {
+        // backing off: a guarded shuffle, feet stepping under a steady guard rather than a sprint away
+        const q = Math.sin(ph), p = Object.assign({}, STANCE, legs(HS - .02 - .025 * Math.abs(q), FR + q * .13, FL + q * .1));
+        p.lean = 4; p.head = -8; p.lu += q * 3; p.ru -= q * 2; return p;
+      }
+      // sprinting: arms pump bent at the elbow, opposite to the legs; the shoulders counter-rotate against the hips
+      const o = { lean: 14 + 10 * sp, head: -6, tw: -s * 12 * sp,
+        rt: 52 * s * sp + 4, lt: -52 * s * sp + 4, ru: 14 - 58 * s * sp, lu: 14 + 58 * s * sp, rs: 0, ls: 0, rf: 0, lf: 0 };
+      o.rs = o.rt - 10 - 74 * Math.max(0, -c) * sp; o.ls = o.lt - 10 - 74 * Math.max(0, c) * sp;
+      o.rf = o.ru + 96; o.lf = o.lu + 96;
+      return mix(STANCE, o, clamp(sp * 1.5, 0, 1));
     }
     if (st === 'idle') {
-      const b = Math.sin(time * 3.2 + f.i), b2 = Math.sin(time * 1.7 + f.i * 2), p = Object.assign({}, STANCE);
-      p.lean += b * 1.5; p.ru += b * 3; p.rf += b * 3; p.lu -= b * 3; p.lf -= b * 2;
-      p.head += b2 * 2.5; p.tw += b2 * 3; p.rt += b * .8; p.lt -= b * .8;   // weight shifts from foot to foot while standing
+      // a fighter never stands still: a bounce on the balls of the feet, and the two hands do not move together
+      const ph = time * Math.PI * 2 * 1.9 + f.i * 1.3, b = .5 + .5 * Math.sin(ph);
+      const p = Object.assign({}, STANCE, legs(HS - .035 * b));
+      p.lean += b * 1.5; p.head -= b * 1.5;
+      p.lu += Math.sin(ph - .5) * 3; p.lf += Math.sin(ph - .9) * 4;
+      p.ru += Math.sin(ph + 1.1) * 2.5; p.rf += Math.sin(ph + .6) * 3;
+      p.tw += Math.sin(ph * .5) * 3;
       return p;
     }
+    if (st === 'block') { const b = Math.sin(time * 5 + f.i); const p = Object.assign({}, STATES.block); p.lu += b * 1.5; p.ru -= b * 1.2; return p; }
     if (st === 'jump' || st === 'fall') {
       let p = Object.assign({}, STATES[st]);
-      if (st === 'jump' && f.airT < .17) p = mix(STATES.takeoff, p, ease(f.airT / .17));   // the body unfolds out of the jump
-      if (f.jumps >= 2) { p.tw = time * 900; p.rt = 110; p.rs = -90; p.lt = 90; p.ls = -100; p.lean = 30; }
-      else if (st === 'fall') { const d = clamp(-f.vy / 20, 0, 1); p.lean += d * 6; p.ru += d * 14; p.lu += d * 12; p.rt -= d * 10; p.lt -= d * 6; }
+      if (st === 'jump' && f.airT < .17 && f.jumps < 2) p = mix(STATES.takeoff, p, ease(f.airT / .17));   // the body unfolds out of the jump
+      if (st === 'fall') { const d = clamp(-f.vy / 20, 0, 1); p.lean += d * 6; p.lt -= d * 10; p.rt -= d * 6; }
+      // the double jump is a somersault: tuck in tight for the middle of the turn, open out to land
+      if (rig.flip != null) { const k = clamp(Math.sin(Math.PI * clamp(rig.flip, 0, 1)) * 1.7, 0, 1); p = mix(p, STATES.tuck, k); }
       return p;
     }
     if (st === 'dizzy') { const p = Object.assign({}, STATES.dizzy); p.lean += Math.sin(time * 6) * 12; p.head += Math.sin(time * 5) * 14; return p; }
@@ -8192,10 +8264,10 @@ const FRig = (() => {
     const mat2 = new THREE.MeshStandardMaterial({ color: col2, emissive: col2.clone().multiplyScalar(.18), roughness: .55 });
     const dark = new THREE.MeshStandardMaterial({ color: 0x0b0d18, roughness: .6 });
     const om = outlineMat();
-    const root = new THREE.Group(), upper = new THREE.Group(), lower = new THREE.Group();
-    root.add(lower); root.add(upper);
+    const root = new THREE.Group(), pivot = new THREE.Group(), upper = new THREE.Group(), lower = new THREE.Group();
+    root.add(pivot); pivot.add(lower); pivot.add(upper);   // the pivot sits at the hips, so somersaults and tumbles turn about the body's middle
     const R = {
-      root, upper, lower, mat, mat2, f, yaw: f.face > 0 ? -.35 : Math.PI + .35, pose: P({}), run: 0, spin: 0, jit: 0,
+      root, pivot, upper, lower, mat, mat2, f, yaw: f.face > 0 ? -.35 : Math.PI + .35, pose: Object.assign({}, STANCE), run: 0, spin: 0, jit: 0,
       torso: limb(upper, .062, mat, om), uaR: limb(upper, .05, mat, om), faR: limb(upper, .045, mat, om), uaL: limb(upper, .05, mat, om), faL: limb(upper, .045, mat, om),
       thR: limb(lower, .062, mat, om), shR: limb(lower, .052, mat, om), thL: limb(lower, .062, mat, om), shL: limb(lower, .052, mat, om),
       head: ball(upper, L.head, mat2, om), hR: ball(upper, .07, mat2, om), hL: ball(upper, .07, mat2, om), fR: ball(lower, .08, mat2, om), fL: ball(lower, .08, mat2, om)
@@ -8259,6 +8331,14 @@ const FRig = (() => {
   // ---- pose -> skeleton ----
   function apply(R, dt, time) {
     const f = R.f;
+    // ---- the double jump is a somersault: a front flip, or a back flip if you are moving away ----
+    if (f.jumps === 2 && R.prevJ !== 2 && !f.onGround && f.alive && f.hs <= 0) { R.flip = 0; R.flipDir = f.vx * f.face < -1.2 ? -1 : 1; R.flipFast = false; }
+    R.prevJ = f.jumps;
+    if (R.flip != null) {
+      if (f.onGround || f.act || f.hs > 0 || !f.alive || f.dash) R.flipFast = true;   // interrupted: finish the turn quickly instead of snapping upright
+      R.flip += dt / (R.flipFast ? .1 : .44);
+      if (R.flip >= 1) R.flip = null;
+    }
     const tgt = poseFor(f, time, R);
     // landing absorb: the knees give under you for a moment after you touch down, on top of whatever else you are doing
     if (f.land > 0 && f.onGround && !f.act && !f.lockA && f.hs <= 0 && f.alive) {
@@ -8339,13 +8419,13 @@ const FRig = (() => {
       } else if (R.rag) { R.rag = null; R.ragW = 0; }
     }
     R.ragOn = ragW;
-    // lower body (hips at the group origin)
-    R.lower.position.set(0, hipY, 0);
+    // lower body (hips at the pivot)
+    R.pivot.position.set(0, hipY, 0); R.lower.position.set(0, 0, 0);
     aim(R.thR, 0, 0, J[1][0], J[1][1], z); aim(R.shR, J[1][0], J[1][1], J[2][0], J[2][1], z);
     aim(R.thL, 0, 0, J[3][0], J[3][1], -z); aim(R.shL, J[3][0], J[3][1], J[4][0], J[4][1], -z);
     R.fR.position.set(J[2][0] + .04 * COS(p.rs * D) * (1 - ragW), J[2][1] - .02, z); R.fL.position.set(J[4][0] + .04 * COS(p.ls * D) * (1 - ragW), J[4][1] - .02, -z);
     // upper body (twists about the hips)
-    R.upper.position.set(0, hipY, 0); R.upper.rotation.y = p.tw * D * (1 - ragW);
+    R.upper.position.set(0, 0, 0); R.upper.rotation.y = p.tw * D * (1 - ragW);
     aim(R.torso, 0, 0, J[5][0], J[5][1], 0);
     aim(R.uaR, J[5][0], J[5][1], J[7][0], J[7][1], z + .02); aim(R.faR, J[7][0], J[7][1], J[8][0], J[8][1], z + .02);
     aim(R.uaL, J[5][0], J[5][1], J[9][0], J[9][1], -z - .02); aim(R.faL, J[9][0], J[9][1], J[10][0], J[10][1], -z - .02);
@@ -8363,10 +8443,24 @@ const FRig = (() => {
     r.position.set(f.x, f.y, 0); r.scale.set(s * wide, s * sq, s * wide);
     const wantYaw = f.face > 0 ? -.38 : Math.PI + .38; let dy = wantYaw - R.yaw; while (dy > Math.PI) dy -= Math.PI * 2; while (dy < -Math.PI) dy += Math.PI * 2;
     R.yaw += dy * (1 - Math.exp(-dt * 18)); r.rotation.y = R.yaw;
-    // tumbling when launched
-    if (f.launched && !f.onGround && f.alive !== undefined && ragW < 1) { R.spin += dt * (f.vx * f.face >= 0 ? -1 : 1) * 9 * (f.hs > 0 || !f.alive ? 1 : .3); r.rotation.z = R.spin * (f.face > 0 ? 1 : -1) * (f.alive ? .45 : 1) * (1 - ragW); }
-    else { R.spin = 0; r.rotation.z *= Math.exp(-dt * 14); if (Math.abs(r.rotation.z) < .003) r.rotation.z = 0; }
-    r.rotation.order = 'YXZ';
+    r.rotation.z = 0; r.rotation.order = 'YXZ';
+    // spinning moves turn the whole body round on the spot, not just the shoulders
+    let spinY = 0;
+    if (f.act && ragW < 1) {
+      const an = ANIM[f.act.m.a];
+      if (an && an.spin) { const m = f.act.m, T = m.t[0] + m.t[1] + (an.spin > 1 ? m.t[2] * .6 : 0); spinY = Math.PI * 2 * an.spin * easeIO(f.act.t / Math.max(.05, T)); }
+    }
+    R.pivot.rotation.y = spinY;
+    // somersaults, and tumbling when launched, both turn about the hips
+    let rz;
+    if (R.flip != null) rz = -R.flipDir * Math.PI * 2 * easeIO(R.flip);
+    else if (f.launched && !f.onGround && ragW < 1) { R.spin += dt * (f.vx * f.face >= 0 ? -1 : 1) * 9 * (f.hs > 0 || !f.alive ? 1 : .3); rz = R.spin * (f.alive ? .45 : 1) * (1 - ragW); }
+    else {
+      R.spin = 0;
+      let z0 = R.pz || 0; z0 = Math.atan2(Math.sin(z0), Math.cos(z0));   // settle upright the short way round
+      rz = z0 * Math.exp(-dt * 14); if (Math.abs(rz) < .003) rz = 0;
+    }
+    R.pz = rz; R.pivot.rotation.z = rz;
     // blob shadow on the surface below
     let gy = 0; if (R.plats) for (const pl of R.plats) if (pl.y <= f.y + .05 && Math.abs(f.x - pl.x) <= pl.w / 2 && pl.y > gy) gy = pl.y;
     R.shadow.position.set(f.x, gy + .03, 0); const sh = clamp(1 - (f.y - gy) / 7, .25, 1); R.shadow.scale.set(s * sh * 1.5, s * sh * 1.5, 1); R.shadow.material.opacity = .7 * sh;
@@ -8745,7 +8839,7 @@ const FightView = (() => {
     for (const f of S.fighters) if (f.lockA) focus = [f, S.fighters[f.lockA.v]];
     const use = focus || all;
     for (const f of use) { minx = Math.min(minx, f.x); maxx = Math.max(maxx, f.x); miny = Math.min(miny, f.y); maxy = Math.max(maxy, f.y); }
-    let tx = (minx + maxx) / 2, spread = maxx - minx + 6.5, zoomT = 0;
+    let tx = (minx + maxx) / 2, spread = maxx - minx + 4.6, zoomT = 0;   // pull in close when the fighters are close, like Smash does
     // lead the action a little: the camera drifts the way the fighters are travelling instead of trailing them
     if (!focus && S.phase === 'fight') { let vx = 0; for (const f of use) vx += f.vx; tx += clamp(vx / Math.max(1, use.length) * .13, -1.8, 1.8); }
     if (S.frz > .05 && S.ev && S.fighters.some((f) => f.act && f.act.m.kind === 'fin' && f.act.t < .02)) zoomT = 1;
@@ -8753,8 +8847,8 @@ const FightView = (() => {
     if (S.phase === 'ko') { const k = S.fighters[S.lastKO]; if (k && S.pt < 1.8) { tx = lerp(tx, k.x, .5); zoomT = Math.max(zoomT, .55); } }
     C.zoom = Math.max(zoomT, C.zoom - dt * 1.4);
     const asp = camera.aspect, th = Math.tan(FOV * Math.PI / 360);
-    let d = Math.max(spread / 2 / (th * asp), (maxy - miny + 4.4) / (2 * th), 10.5);
-    d = clamp(d, 10.5, 40);
+    let d = Math.max(spread / 2 / (th * asp), (maxy - miny + 4.4) / (2 * th), 8.4);
+    d = clamp(d, 8.4, 40);
     let ty = clamp(1.3 + (miny + maxy) / 2 * .55 + 0.2, 1.7, 5.2);
     if (focus) { tx = (focus[0].x + focus[1].x) / 2; ty = 1.6 + focus[1].y * .6; d = Math.max(7.5, 6.2 / (th * asp)); }
     d = lerp(d, Math.max(8.5, d * .5), C.zoom * (focus ? 0.5 : 1));
@@ -8814,7 +8908,7 @@ const FightView = (() => {
     const v = new THREE.Vector3(x, y, z || 0).project(camera);
     return { x: (v.x * .5 + .5) * W, y: (-v.y * .5 + .5) * H, vis: v.z < 1 };
   }
-  return { init, resize, setup, teardown, update, render, handle, project, puff, ring, get ok() { return ready; }, get fail() { return failMsg; }, get scene() { return scene; }, get camS() { return camS; }, get rigs() { return rigs; } };
+  return { init, resize, setup, teardown, update, render, handle, project, puff, ring, get ok() { return ready; }, get fail() { return failMsg; }, get scene() { return scene; }, get camS() { return camS; }, get rigs() { return rigs; }, get camera() { return camera; } };
 })();
 
 'use strict';
